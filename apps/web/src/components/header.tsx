@@ -10,6 +10,7 @@ export default function Header() {
     { to: "/members", label: "Members" },
     { to: "/banks", label: "Bank Accounts" },
     { to: "/users", label: "Users" },
+    { to: "/settings", label: "Settings" },
   ] as const;
 
   return (
