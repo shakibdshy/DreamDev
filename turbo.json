@@ -13,6 +13,11 @@
     "check-types": {
       "dependsOn": ["^check-types"]
     },
+    "test": {
+      "dependsOn": ["db:generate"],
+      "cache": false,
+      "passThroughEnv": ["*"]
+    },
     "dev": {
       "cache": false,
       "persistent": true
