@@ -84,13 +84,53 @@ function MemberDetailPage() {
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-6 p-4">
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="flex items-start gap-4">
+          {member.photo ? (
+            <img src={member.photo} alt={member.name} className="h-16 w-16 rounded-full object-cover" />
+          ) : (
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted text-2xl font-semibold text-muted-foreground">
+              {member.name.slice(0, 1)}
+            </div>
+          )}
+          <div>
           <h1 className="text-2xl font-semibold">{member.name}</h1>
           <p className="text-sm text-muted-foreground">
             {member.mobile} · joined {new Date(member.joiningDate).toLocaleDateString()} ·{" "}
             <span className="capitalize">{member.status}</span>
           </p>
           {member.address && <p className="text-sm text-muted-foreground">{member.address}</p>}
+          <div className="mt-1 flex items-center gap-2 text-xs">
+            <label className="cursor-pointer underline">
+              Replace photo
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const { uploadProfilePhoto } = await import("@/lib/photo");
+                    const url = await uploadProfilePhoto(file);
+                    await api(`/api/members/${id}`, { method: "PATCH", body: JSON.stringify({ photo: url }) });
+                    toast.success("Photo updated");
+                    invalidate();
+                  } catch (error) {
+                    toast.error((error as Error).message);
+                  }
+                }}
+              />
+            </label>
+            {member.photo && (
+              <button
+                className="underline"
+                onClick={() => act.mutate({ path: `/api/members/${id}`, method: "PATCH", body: { photo: null } })}
+              >
+                Remove photo
+              </button>
+            )}
+          </div>
+          </div>
         </div>
         <div className="flex flex-col items-end gap-2">
           <div className="text-right">

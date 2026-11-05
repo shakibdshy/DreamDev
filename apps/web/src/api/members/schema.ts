@@ -11,6 +11,7 @@ export const createMemberBodySchema = z.object({
   joiningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Joining date is required (YYYY-MM-DD)"),
   shareQuantity: z.number().int().min(1, "At least 1 share").max(100),
   address: z.string().trim().min(1).optional(),
+  photo: z.url().optional(), // Blob URL (ADR-0003), set via /api/uploads
   notes: z.string().trim().min(1).optional(),
 });
 
@@ -20,6 +21,7 @@ export const updateMemberBodySchema = z
     mobile: z.string().trim().regex(bdMobile, "Enter a valid BD mobile (01XXXXXXXXX)").optional(),
     joiningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     address: z.string().trim().min(1).nullable().optional(),
+    photo: z.url().nullable().optional(),
     notes: z.string().trim().min(1).nullable().optional(),
   })
   .refine((body) => Object.values(body).some((v) => v !== undefined), { message: "Nothing to update" });

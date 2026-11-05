@@ -14,9 +14,11 @@ import { Label } from "@DreamDev/ui/components/label";
 
 import { listMembersQuerySchema } from "@/api/members/schema";
 import { api } from "@/lib/api";
+import { uploadProfilePhoto } from "@/lib/photo";
 
 interface MemberRow {
   id: string;
+  photo: string | null;
   name: string;
   mobile: string;
   joiningDate: string;
@@ -63,6 +65,16 @@ function MembersPage() {
 
   const columnHelper = createColumnHelper<MemberRow>();
   const columns = [
+    columnHelper.display({
+      id: "photo",
+      header: "",
+      cell: ({ row }) =>
+        row.original.photo ? (
+          <img src={row.original.photo} alt="" loading="lazy" className="h-8 w-8 rounded-full object-cover" />
+        ) : (
+          <div className="h-8 w-8 rounded-full bg-muted" />
+        ),
+    }),
     columnHelper.accessor("name", {
       header: "Name",
       cell: (info) => <Link to="/members/$id" params={{ id: info.row.original.id }} search={{}} className="font-medium underline-offset-2 hover:underline">{info.getValue()}</Link>,
@@ -149,9 +161,18 @@ function MembersPage() {
 
 function CreateMemberForm() {
   const queryClient = useQueryClient();
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
   const form = useForm({
     defaultValues: { name: "", mobile: "", joiningDate: "", shareQuantity: "1", address: "" },
     onSubmit: async ({ value }) => {
+      let photo: string | undefined;
+      if (photoFile) {
+        try {
+          photo = await uploadProfilePhoto(photoFile);
+        } catch (error) {
+          toast.error(`Photo skipped: ${(error as Error).message}`); // never block the save
+        }
+      }
       try {
         await api("/api/members", {
           method: "POST",
@@ -161,6 +182,7 @@ function CreateMemberForm() {
             joiningDate: value.joiningDate,
             shareQuantity: Number(value.shareQuantity),
             address: value.address || undefined,
+            photo,
           }),
         });
         toast.success(`Added ${value.name}`);
@@ -220,6 +242,11 @@ function CreateMemberForm() {
             </div>
           )}
         </form.Field>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor="m-photo">Photo (optional)</Label>
+          <Input id="m-photo" type="file" accept="image/jpeg,image/png,image/webp" onChange={(e) => setPhotoFile(e.target.files?.[0] ?? null)} />
+          <p className="text-xs text-muted-foreground">Resized to 512px automatically.</p>
+        </div>
         <div className="sm:col-span-3">
           <form.Subscribe selector={(s) => [s.canSubmit, s.isSubmitting]}>
             {([canSubmit, isSubmitting]) => (
