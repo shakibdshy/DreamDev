@@ -2,7 +2,7 @@ import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 
 import { HttpError, parseOr422, requireUser } from "../http";
-import { getPriceEntries, memberFacts } from "../members/billing-facts";
+import { getPriceEntries, memberFacts, toMemberEntries } from "../members/billing-facts";
 import { dueSummary } from "@DreamDev/db/domain/due";
 import { monthOfDate } from "@DreamDev/db/domain/month";
 import { createContributionBodySchema, listFeedQuerySchema, updateContributionBodySchema } from "./schema";
@@ -163,10 +163,12 @@ export async function listFeed(deps: TxnDeps, query: unknown) {
     ),
   ];
 
-  entries.sort((a, b) => (a.date === b.date ? a.id.localeCompare(b.id) : order === "asc" ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)));
+  // Adjustments carry their own dates — apply the date range uniformly in the merge
+  const ranged = entries.filter((e) => (!from || e.date >= from) && (!to || e.date <= to));
+  ranged.sort((a, b) => (a.date === b.date ? a.id.localeCompare(b.id) : order === "asc" ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)));
 
-  const total = entries.length;
-  const data = entries.slice((page - 1) * pageSize, page * pageSize);
+  const total = ranged.length;
+  const data = ranged.slice((page - 1) * pageSize, page * pageSize);
   return { data, meta: { page, pageSize, total } };
 }
 
@@ -185,14 +187,7 @@ export async function memberPosition(deps: TxnDeps, memberId: string) {
   ]);
 
   const facts = memberFacts(member, allotments, prices, statusChanges);
-  const entries = [
-    ...contributions.map((c) => ({ date: day(c.creditDate), amount: c.amount, kind: "contribution" as const })),
-    ...adjustments.map((a) => ({
-      date: a.month ? `${a.month}-15` : day(a.createdAt),
-      amount: a.amount,
-      kind: "adjustment" as const,
-    })),
-  ];
+  const entries = toMemberEntries(contributions, adjustments);
   const summary = dueSummary(facts, entries, monthOfDate(new Date()));
 
   return {

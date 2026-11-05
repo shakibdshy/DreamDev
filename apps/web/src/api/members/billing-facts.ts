@@ -49,6 +49,21 @@ export function inactiveIntervals(statusChanges: StatusChangeRow[]): InactiveInt
   return intervals;
 }
 
+/** Folds stored Contribution/Adjustment rows into domain MemberEntry shape. */
+export function toMemberEntries(
+  contributions: { creditDate: Date; amount: number }[],
+  adjustments: { month: string | null; createdAt: Date; amount: number }[],
+) {
+  return [
+    ...contributions.map((c) => ({ date: c.creditDate.toISOString().slice(0, 10), amount: c.amount, kind: "contribution" as const })),
+    ...adjustments.map((a) => ({
+      date: a.month ? `${a.month}-15` : a.createdAt.toISOString().slice(0, 10),
+      amount: a.amount,
+      kind: "adjustment" as const,
+    })),
+  ];
+}
+
 export function memberFacts(
   member: MemberRow,
   allotments: ShareAllotment[],

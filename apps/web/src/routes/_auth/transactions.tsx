@@ -4,7 +4,7 @@ import { useForm } from "@tanstack/react-form";
 import { createCollection, queryCollectionOptions, useLiveQuery } from "@tanstack/react-db";
 import { debounce } from "@tanstack/pacer";
 import { toast } from "sonner";
-import { useMemo } from "react";
+import { useMemo, useRef } from "react";
 import { z } from "zod";
 
 import { todayInDhaka } from "@DreamDev/db/domain/month";
@@ -51,11 +51,16 @@ function TransactionsPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
 
+  // Accumulate patches so two quick filter changes never drop the first
+  const pendingPatch = useRef<Record<string, string | undefined>>({});
   const onFilter = useMemo(
     () =>
       debounce(
-        (patch: Record<string, string | undefined>) =>
-          navigate({ search: (prev) => ({ ...prev, ...patch, page: 1 }) }),
+        (patch: Record<string, string | undefined>) => {
+          const merged = pendingPatch.current;
+          pendingPatch.current = {};
+          navigate({ search: (prev) => ({ ...prev, ...merged, ...patch, page: 1 }) });
+        },
         { wait: 300 },
       ),
     [navigate],
@@ -136,7 +141,7 @@ function TransactionsPage() {
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
-              <th className="px-3 py-2 text-left font-medium">Credit Date</th>
+              <th className="px-3 py-2 text-left font-medium">Date</th>
               <th className="px-3 py-2 text-left font-medium">Type</th>
               <th className="px-3 py-2 text-left font-medium">Member</th>
               <th className="px-3 py-2 text-left font-medium">Bank Account</th>
@@ -166,12 +171,16 @@ function TransactionsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => {
+                          onClick={async () => {
                             const amount = window.prompt("New amount", String(row.amount));
                             if (!amount) return;
-                            feedCollection.update(row.id, (draft) => {
-                              draft.amount = Number(amount);
-                            });
+                            try {
+                              await feedCollection.update(row.id, (draft) => {
+                                draft.amount = Number(amount);
+                              });
+                            } catch (error) {
+                              toast.error((error as Error).message);
+                            }
                           }}
                         >
                           Edit
@@ -179,7 +188,13 @@ function TransactionsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => feedCollection.delete(row.id)}
+                          onClick={async () => {
+                            try {
+                              await feedCollection.delete(row.id);
+                            } catch (error) {
+                              toast.error((error as Error).message);
+                            }
+                          }}
                         >
                           Delete
                         </Button>
@@ -219,6 +234,7 @@ function ContributionForm({ collection }: { collection: ReturnType<typeof create
     onSubmit: async ({ value }) => {
       try {
         await collection.insert({
+          ...value,
           id: `optimistic-${crypto.randomUUID()}`,
           type: "contribution",
           date: value.creditDate,
@@ -227,13 +243,13 @@ function ContributionForm({ collection }: { collection: ReturnType<typeof create
           bankName: null,
           toBankName: null,
           note: value.note || null,
-          ...value,
-        } as never);
+        } as FeedRow & Record<string, unknown>);
         toast.success("Contribution recorded");
         form.reset();
         // optimistically refresh balances and member positions
         await queryClient.invalidateQueries({ queryKey: ["banks"] });
         await queryClient.invalidateQueries({ queryKey: ["members"] });
+        await queryClient.invalidateQueries({ queryKey: ["position"] });
       } catch (error) {
         toast.error((error as Error).message);
       }

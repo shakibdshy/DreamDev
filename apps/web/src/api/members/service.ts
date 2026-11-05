@@ -5,7 +5,7 @@ import { projectMonths, type MonthCell } from "@DreamDev/db/domain/projection";
 import { dueSummary, type DueSummary } from "@DreamDev/db/domain/due";
 
 import { HttpError, parseOr422, requireUser } from "../http";
-import { getPriceEntries, memberFacts } from "./billing-facts";
+import { getPriceEntries, memberFacts, toMemberEntries } from "./billing-facts";
 import {
   changeSharesBodySchema,
   createMemberBodySchema,
@@ -162,14 +162,7 @@ export async function getMember(deps: MembersDeps, id: string, year?: number) {
   ]);
 
   const facts = memberFacts(member, allotmentsRaw, prices, statusChanges);
-  const entries = [
-    ...contributions.map((c) => ({ date: c.creditDate.toISOString().slice(0, 10), amount: c.amount, kind: "contribution" as const })),
-    ...adjustments.map((a) => ({
-      date: (a.month ? `${a.month}-15` : a.createdAt.toISOString().slice(0, 10)),
-      amount: a.amount,
-      kind: "adjustment" as const,
-    })),
-  ];
+  const entries = toMemberEntries(contributions, adjustments);
 
   const through = monthOfDate(new Date());
   const summary: DueSummary = dueSummary(facts, entries, through);
