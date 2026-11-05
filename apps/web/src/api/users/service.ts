@@ -8,7 +8,6 @@ import {
   listUsersQuerySchema,
   resetPasswordBodySchema,
   updateUserBodySchema,
-  type UserRole,
 } from "./schema";
 
 export interface UsersDeps {
@@ -30,6 +29,24 @@ function requireAdmin(session: Session | null) {
   if (session.user.status !== "active") throw new HttpError(401, "Session no longer valid");
   if (session.user.role !== "admin") throw new HttpError(403, "Admin role required");
   return session.user;
+}
+
+/**
+ * Guards operations that strip the last line of Admin access: never yourself,
+ * never the last active Admin (also holds defensively for deactivation — the
+ * actor is always another active Admin there, but role changes reach it).
+ */
+async function assertTargetMutable(
+  db: Database,
+  target: { id: string; role: string; status: string },
+  actorId: string,
+  action: string,
+) {
+  if (target.id === actorId) throw new HttpError(409, `You cannot ${action} your own account`);
+  if (target.role === "admin" && target.status === "active") {
+    const activeAdmins = await db.user.count({ where: { role: "admin", status: "active" } });
+    if (activeAdmins <= 1) throw new HttpError(409, `Cannot ${action} the last active Admin`);
+  }
 }
 
 export interface UserListItem {
@@ -93,15 +110,20 @@ export async function createUser(deps: UsersDeps, body: unknown) {
 
 /** Updates name and/or role (Admin only). Role takes effect on the next request. */
 export async function updateUser(deps: UsersDeps, id: string, body: unknown) {
-  requireAdmin(deps.session);
+  const actor = requireAdmin(deps.session);
   const input = parseOr422(updateUserBodySchema, body);
 
   const target = await deps.db.user.findUnique({ where: { id } });
   if (!target) throw new HttpError(404, "User not found");
 
+  // Demoting an active Admin can strand the fund without any Admin
+  if (input.role === "editor" && target.role === "admin" && target.status === "active") {
+    await assertTargetMutable(deps.db, target, actor.id, "demote");
+  }
+
   return deps.db.user.update({
     where: { id },
-    data: { name: input.name, role: input.role as UserRole | undefined },
+    data: { name: input.name, role: input.role },
     select: publicUser,
   });
 }
@@ -112,12 +134,7 @@ export async function deactivateUser(deps: UsersDeps, id: string) {
 
   const target = await deps.db.user.findUnique({ where: { id } });
   if (!target) throw new HttpError(404, "User not found");
-  if (target.id === actor.id) throw new HttpError(409, "You cannot deactivate your own account");
-
-  if (target.role === "admin" && target.status === "active") {
-    const activeAdmins = await deps.db.user.count({ where: { role: "admin", status: "active" } });
-    if (activeAdmins <= 1) throw new HttpError(409, "Cannot deactivate the last active Admin");
-  }
+  await assertTargetMutable(deps.db, target, actor.id, "deactivate");
 
   const [deactivated] = await deps.db.$transaction([
     deps.db.user.update({ where: { id }, data: { status: "deactivated" }, select: publicUser }),
@@ -134,7 +151,7 @@ export async function reactivateUser(deps: UsersDeps, id: string) {
   return deps.db.user.update({ where: { id }, data: { status: "active" }, select: publicUser });
 }
 
-/** Sets a new password for a User (Admin only). */
+/** Sets a new password for a User (Admin only) and revokes their sessions — the old password stops working everywhere. */
 export async function resetPassword(deps: UsersDeps, id: string, body: unknown) {
   requireAdmin(deps.session);
   const { newPassword } = parseOr422(resetPasswordBodySchema, body);
@@ -142,9 +159,12 @@ export async function resetPassword(deps: UsersDeps, id: string, body: unknown) 
   const account = await deps.db.account.findFirst({ where: { userId: id, providerId: "credential" } });
   if (!account) throw new HttpError(404, "User has no password account");
 
-  await deps.db.account.update({
-    where: { id: account.id },
-    data: { password: await hashPassword(newPassword) },
-  });
+  await deps.db.$transaction([
+    deps.db.account.update({
+      where: { id: account.id },
+      data: { password: await hashPassword(newPassword) },
+    }),
+    deps.db.session.deleteMany({ where: { userId: id } }),
+  ]);
   return { ok: true };
 }

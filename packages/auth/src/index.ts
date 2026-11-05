@@ -6,10 +6,13 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 export type AuthConfig = {
   BETTER_AUTH_URL: string;
   BETTER_AUTH_SECRET: string;
+  /** Tests only: they sign in repeatedly and would trip the rate limiter. */
+  disableRateLimit?: boolean;
 };
 
 /** Roles per the spec: Admin manages everything, Editor manages fund data only. */
-export type UserRole = "admin" | "editor";
+export const USER_ROLES = ["admin", "editor"] as const;
+export type UserRole = (typeof USER_ROLES)[number];
 
 export function createAuth(env: AuthConfig, database: Database) {
   return betterAuth({
@@ -20,6 +23,7 @@ export function createAuth(env: AuthConfig, database: Database) {
     emailAndPassword: { enabled: true },
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL,
+    rateLimit: env.disableRateLimit ? { enabled: false } : undefined,
     plugins: [tanstackStartCookies()],
     user: {
       additionalFields: {

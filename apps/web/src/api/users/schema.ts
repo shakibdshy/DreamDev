@@ -1,6 +1,7 @@
+import { USER_ROLES } from "@DreamDev/auth";
 import { z } from "zod";
 
-export const roleSchema = z.enum(["admin", "editor"]);
+export const roleSchema = z.enum(USER_ROLES);
 export type UserRole = z.infer<typeof roleSchema>;
 
 export const listUsersQuerySchema = z.object({

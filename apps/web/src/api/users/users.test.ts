@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 
 import { createAuth, type Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
@@ -12,6 +12,7 @@ let auth: ReturnType<typeof createAuth>;
 const TEST_ENV = {
   BETTER_AUTH_URL: "http://127.0.0.1:5999",
   BETTER_AUTH_SECRET: "test-secret-that-is-long-enough-1234567890",
+  disableRateLimit: true,
 };
 
 beforeAll(async () => {
@@ -21,10 +22,6 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await resetDb();
-});
-
-afterAll(async () => {
-  await db.$disconnect();
 });
 
 /** A minimal session-shaped object — services only read id/role/status. */
@@ -135,6 +132,16 @@ describe("users service", () => {
     expect(refetched?.role).toBe("admin");
   });
 
+  test("cannot demote yourself or the last active Admin to Editor", async () => {
+    const admin = await seedUser({ role: "admin" });
+    const otherAdmin = await seedUser({ role: "admin" });
+    // Two admins: demoting the other is fine
+    expect((await updateUser({ db, session: sessionFor(admin) }, otherAdmin.id, { role: "editor" })).role).toBe("editor");
+    // Now admin is the only active admin: self-demotion refused
+    await expect(updateUser({ db, session: sessionFor(admin) }, admin.id, { role: "editor" })).rejects.toMatchObject({ status: 409 });
+    expect((await db.user.findUnique({ where: { id: admin.id } }))?.role).toBe("admin");
+  });
+
   test("deactivation revokes sessions; self and last-active-Admin are refused", async () => {
     const adminA = await seedUser({ role: "admin" });
     const adminB = await seedUser({ role: "admin" });
@@ -158,10 +165,14 @@ describe("users service", () => {
     expect(back.status).toBe("active");
   });
 
-  test("admin resets a password: the old one stops working, the new one works", async () => {
+  test("admin resets a password: the old one stops working, the new one works, sessions revoked", async () => {
     const admin = await seedUser({ role: "admin" });
     await signUp("reset@test.local");
-    await resetPassword({ db, session: sessionFor(admin) }, (await db.user.findUnique({ where: { email: "reset@test.local" } }))!.id, { newPassword: "brand-new-456" });
+    const target = (await db.user.findUnique({ where: { email: "reset@test.local" } }))!;
+    expect(await db.session.count({ where: { userId: target.id } })).toBeGreaterThan(0); // signed in from sign-up
+
+    await resetPassword({ db, session: sessionFor(admin) }, target.id, { newPassword: "brand-new-456" });
+    expect(await db.session.count({ where: { userId: target.id } })).toBe(0); // sessions revoked
 
     await expect(auth.api.signInEmail({ body: { email: "reset@test.local", password: "password-123" } })).rejects.toThrow();
     const signedIn = await auth.api.signInEmail({ body: { email: "reset@test.local", password: "brand-new-456" } });
