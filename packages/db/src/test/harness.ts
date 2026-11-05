@@ -80,7 +80,9 @@ async function ensureDatabaseExists(baseUrl: string, testUrl: string): Promise<v
 }
 
 async function pushSchema(testUrl: string): Promise<void> {
-  await $`DATABASE_URL=${testUrl} bun run db:push -- --accept-data-loss`.quiet();
+  // The harness is shared across packages — always push from packages/db, wherever tests run.
+  const pkgDir = path.resolve(import.meta.dir, "../../");
+  await $`DATABASE_URL=${testUrl} bun run --cwd ${pkgDir} db:push -- --accept-data-loss`.quiet();
 }
 
 /** Truncates every table in the public schema — run between tests for isolation. */
