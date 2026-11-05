@@ -27,14 +27,13 @@ export interface DueSummary {
  * payments are never allocated to specific months.
  */
 export function dueSummary(facts: MemberBillingFacts, entries: MemberEntry[], through: Month): DueSummary {
-  const counted = entries.filter((entry) => compareMonths(monthOfDate(entry.date), through) <= 0);
-
-  const contributed = counted
-    .filter((entry) => entry.kind === "contribution")
-    .reduce((total, entry) => total + entry.amount, 0);
-  const adjusted = counted
-    .filter((entry) => entry.kind === "adjustment")
-    .reduce((total, entry) => total + entry.amount, 0);
+  let contributed = 0;
+  let adjusted = 0;
+  for (const entry of entries) {
+    if (compareMonths(monthOfDate(entry.date), through) > 0) continue;
+    if (entry.kind === "contribution") contributed += entry.amount;
+    else adjusted += entry.amount;
+  }
   const billed = billedBetween(facts, facts.joiningMonth, through);
   const due = billed + adjusted - contributed;
 

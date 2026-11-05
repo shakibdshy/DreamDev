@@ -30,22 +30,29 @@ export interface MemberBillingFacts {
   prices: SharePriceEntry[];
 }
 
-/** The quantity active in a month: the latest allotment effective on or before it. */
+/** The quantity active in a month: the latest allotment effective on or before it (input order irrelevant). */
 export function quantityAt(allotments: ShareAllotment[], month: Month): number {
-  let quantity = 0;
-  for (const allotment of allotments) {
-    if (compareMonths(allotment.effectiveMonth, month) <= 0) quantity = allotment.quantity;
-  }
-  return quantity;
+  return latestEffectiveOnOrBefore(allotments, month)?.quantity ?? 0;
 }
 
-/** The share price in a month: the latest price effective on or before it. */
+/** The share price in a month: the latest price effective on or before it (input order irrelevant). */
 export function priceAt(prices: SharePriceEntry[], month: Month): number {
-  let price = 0;
-  for (const entry of prices) {
-    if (compareMonths(entry.effectiveMonth, month) <= 0) price = entry.price;
+  return latestEffectiveOnOrBefore(prices, month)?.price ?? 0;
+}
+
+interface EffectiveDated {
+  effectiveMonth: Month;
+}
+
+/** The entry with the greatest effectiveMonth that is still on or before `month`. */
+function latestEffectiveOnOrBefore<T extends EffectiveDated>(entries: T[], month: Month): T | undefined {
+  let latest: T | undefined;
+  for (const entry of entries) {
+    if (compareMonths(entry.effectiveMonth, month) <= 0) {
+      if (!latest || compareMonths(entry.effectiveMonth, latest.effectiveMonth) > 0) latest = entry;
+    }
   }
-  return price;
+  return latest;
 }
 
 export function isBillableMonth(facts: MemberBillingFacts, month: Month): boolean {

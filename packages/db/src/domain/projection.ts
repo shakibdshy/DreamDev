@@ -43,13 +43,25 @@ export function projectMonths(
       .sort(compareMonths)[0] ?? from;
 
   let carry = 0;
+  // Debt owed from before the range (unpaid bills, opening-due Adjustments)
+  // surfaces in the first projected month, keeping the walk consistent with the Due.
+  let preRangeDebt = 0;
+
   const cells = monthRangeInclusive(walkFrom, through).map((month): MonthCell => {
     const bill = billForMonth(facts, month);
     const { contribution = 0, adjustment = 0 } = byMonth.get(month) ?? {};
-    const effectiveBill = Math.max(0, bill + adjustment);
+    let effectiveBill = Math.max(0, bill + adjustment);
+
+    const inRange = compareMonths(month, from) >= 0;
+    if (inRange && preRangeDebt > 0) {
+      effectiveBill += preRangeDebt;
+      preRangeDebt = 0;
+    }
+
     const available = contribution + carry;
     const applied = Math.min(effectiveBill, available);
     carry = available - applied;
+    if (!inRange) preRangeDebt += effectiveBill - applied;
 
     let status: MonthCellStatus;
     if (effectiveBill === 0) status = contribution > 0 ? "advance" : "not-billed";

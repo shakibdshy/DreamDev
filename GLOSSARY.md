@@ -25,7 +25,7 @@ A unit of monthly saving commitment. A member's share quantity is fixed when the
 _Avoid_: unit, slot, installment
 
 **Share Price**:
-The taka amount one Share costs per month. Fixed globally at ৳5,000.
+The taka amount one Share costs per month. One global price for the whole Team (৳5,000 today); when changed, the new price applies from that month forward and past months never change.
 _Avoid_: rate, fee
 
 **Joining Date**:
@@ -35,6 +35,10 @@ _Avoid_: start date, registration date
 **Exit**:
 A member leaving the Team. Billing stops at the exit month.
 _Avoid_: leaving, closing, deactivation (that's for Users)
+
+**Inactive**:
+A Member paused from Billing without leaving the Team (e.g. abroad). Billing skips Inactive months and resumes on reactivation.
+_Avoid_: paused, dormant, suspended
 
 **Billing**:
 The rule that each calendar month a member owes Share quantity × Share Price, from their joining month until their exit month.
