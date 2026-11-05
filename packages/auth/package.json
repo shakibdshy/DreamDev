@@ -1,0 +1,20 @@
+{
+  "name": "@DreamDev/auth",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*.ts"
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@DreamDev/db": "workspace:*",
+    "better-auth": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@DreamDev/config": "workspace:*",
+    "typescript": "catalog:"
+  }
+}

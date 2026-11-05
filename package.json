@@ -1,0 +1,54 @@
+{
+  "name": "DreamDev",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "apps/*",
+      "packages/*"
+    ],
+    "catalog": {
+      "zod": "^4.5.4",
+      "typescript": "^6.0.3",
+      "varlock": "1.23.0",
+      "next-themes": "^0.4.6",
+      "sonner": "^2.0.8",
+      "tailwindcss": "^4.3.3",
+      "@prisma/client": "^7.10.0",
+      "better-auth": "1.7.12"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "check-types": "turbo run check-types",
+    "db:push": "turbo run db:push -F @DreamDev/db --",
+    "db:studio": "turbo run db:studio -F @DreamDev/db --",
+    "db:generate": "turbo run db:generate -F @DreamDev/db --",
+    "db:migrate": "turbo run db:migrate -F @DreamDev/db --",
+    "deploy:infra": "turbo run deploy -F @DreamDev/infra --",
+    "destroy": "turbo run destroy -F @DreamDev/infra --",
+    "deploy:setup": "bunx vercel link",
+    "dev:vercel": "bunx vercel dev -L",
+    "env:preview": "tsx scripts/sync-vercel-env.ts preview",
+    "env:production": "tsx scripts/sync-vercel-env.ts production",
+    "deploy": "bunx vercel deploy",
+    "deploy:prod": "bunx vercel deploy --prod",
+    "deploy:check": "bunx vercel deploy --dry",
+    "env:generate": "varlock codegen --path ./apps/web/ && varlock codegen --path ./packages/db/",
+    "postinstall": "varlock codegen --path ./apps/web/ && varlock codegen --path ./packages/db/",
+    "auth:generate": "cd apps/web && bun run auth:generate"
+  },
+  "dependencies": {
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@DreamDev/config": "workspace:*",
+    "@types/node": "^26.4.1",
+    "tsx": "^4.23.13",
+    "turbo": "^2.11.7",
+    "typescript": "catalog:",
+    "varlock": "catalog:"
+  },
+  "packageManager": "bun@1.4.3"
+}
