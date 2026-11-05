@@ -33,6 +33,7 @@ model Member {
   loanRepayments LoanRepayment[]
   adjustments    Adjustment[]
   shareAllotments ShareAllotment[]
+  statusChanges  MemberStatusChange[]
 
   @@map("member")
 }
@@ -195,9 +196,29 @@ model Adjustment {
   @@map("adjustment")
 }
 
-model Settings {
-  id         String @id @default("singleton")
-  sharePrice Int    @default(5000)
+model MemberStatusChange {
+  id        String   @id @default(uuid())
+  memberId  String
+  status    String // active | inactive | exited
+  date      DateTime @db.Date
+  note      String?
+  createdBy String?
+  createdAt DateTime @default(now())
 
-  @@map("settings")
+  member Member @relation(fields: [memberId], references: [id])
+
+  @@index([memberId, date])
+  @@map("member_status_change")
+}
+
+// Effective-dated global Share Price (GLOSSARY.md): a change applies from its
+// month forward; past months never re-bill. First entry seeded at ৳5,000.
+model SharePriceEntry {
+  id             String   @id @default(uuid())
+  effectiveMonth String // YYYY-MM
+  price          Int
+  createdAt      DateTime @default(now())
+
+  @@unique([effectiveMonth])
+  @@map("share_price_entry")
 }
