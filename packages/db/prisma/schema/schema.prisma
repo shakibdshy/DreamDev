@@ -1,9 +1,203 @@
+// The fund's domain schema (GLOSSARY.md, ADR-0002: one typed table per ledger
+// entry — never a polymorphic transactions table). All money is integer taka.
+// Months are "YYYY-MM" strings; dates are date-only Credit Dates (Asia/Dhaka).
+
 generator client {
-  provider = "prisma-client"
-  output   = "../generated"
+  provider     = "prisma-client"
+  output       = "../generated"
   moduleFormat = "esm"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+model Member {
+  id          String    @id @default(uuid())
+  name        String
+  mobile      String    @unique
+  joiningDate DateTime  @db.Date
+  address     String?
+  photo       String?
+  notes       String?
+  status      String    @default("active") // active | inactive | exited
+  exitDate    DateTime? @db.Date
+  deletedAt   DateTime?
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  contributions  Contribution[]
+  loans          Loan[]
+  loanRepayments LoanRepayment[]
+  adjustments    Adjustment[]
+  shareAllotments ShareAllotment[]
+
+  @@map("member")
+}
+
+model ShareAllotment {
+  id             String   @id @default(uuid())
+  memberId       String
+  quantity       Int
+  effectiveMonth String // YYYY-MM
+  createdBy      String?
+  createdAt      DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id])
+
+  @@index([memberId, effectiveMonth])
+  @@map("share_allotment")
+}
+
+model BankAccount {
+  id             String  @id @default(uuid())
+  bankName       String
+  address        String?
+  openingBalance Int     @default(0)
+  deletedAt      DateTime?
+  createdBy      String?
+  updatedBy      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  contributions     Contribution[]
+  loansOut          Loan[]             @relation("LoanBank")
+  loanRepayments    LoanRepayment[]
+  expenses          Expense[]
+  transfersFrom     Transfer[]         @relation("TransferFrom")
+  transfersTo       Transfer[]         @relation("TransferTo")
+
+  @@map("bank_account")
+}
+
+model Contribution {
+  id               String    @id @default(uuid())
+  memberId         String
+  bankAccountId    String
+  amount           Int
+  creditDate       DateTime  @db.Date
+  sharePriceAtEntry Int
+  shareQtyAtEntry  Int
+  note             String?
+  deletedAt        DateTime?
+  createdBy        String?
+  updatedBy        String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+  member      Member      @relation(fields: [memberId], references: [id])
+
+  @@index([memberId, creditDate])
+  @@index([bankAccountId, creditDate])
+  @@map("contribution")
+}
+
+model Loan {
+  id            String    @id @default(uuid())
+  memberId      String
+  bankAccountId String
+  amount        Int
+  date          DateTime  @db.Date
+  note          String?
+  deletedAt     DateTime?
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  bankAccount BankAccount     @relation("LoanBank", fields: [bankAccountId], references: [id])
+  member      Member          @relation(fields: [memberId], references: [id])
+  repayments  LoanRepayment[]
+
+  @@index([memberId])
+  @@map("loan")
+}
+
+model LoanRepayment {
+  id            String    @id @default(uuid())
+  loanId        String
+  memberId      String
+  bankAccountId String
+  amount        Int
+  creditDate    DateTime  @db.Date
+  deletedAt     DateTime?
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  loan        Loan        @relation(fields: [loanId], references: [id])
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+  member      Member      @relation(fields: [memberId], references: [id])
+
+  @@index([loanId])
+  @@index([bankAccountId, creditDate])
+  @@map("loan_repayment")
+}
+
+model Expense {
+  id            String    @id @default(uuid())
+  bankAccountId String
+  amount        Int
+  date          DateTime  @db.Date
+  note          String?
+  deletedAt     DateTime?
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  bankAccount BankAccount @relation(fields: [bankAccountId], references: [id])
+
+  @@index([bankAccountId, date])
+  @@map("expense")
+}
+
+model Transfer {
+  id            String    @id @default(uuid())
+  fromAccountId String
+  toAccountId   String
+  amount        Int
+  date          DateTime  @db.Date
+  note          String?
+  deletedAt     DateTime?
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  fromAccount BankAccount @relation("TransferFrom", fields: [fromAccountId], references: [id])
+  toAccount   BankAccount @relation("TransferTo", fields: [toAccountId], references: [id])
+
+  @@index([fromAccountId])
+  @@index([toAccountId])
+  @@map("transfer")
+}
+
+model Adjustment {
+  id        String    @id @default(uuid())
+  memberId  String
+  amount    Int
+  month     String?
+  reason    String
+  deletedAt DateTime?
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  member Member @relation(fields: [memberId], references: [id])
+
+  @@index([memberId])
+  @@map("adjustment")
+}
+
+model Settings {
+  id         String @id @default("singleton")
+  sharePrice Int    @default(5000)
+
+  @@map("settings")
 }
