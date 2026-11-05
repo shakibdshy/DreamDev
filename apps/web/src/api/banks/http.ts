@@ -1,12 +1,8 @@
-import { appContext, ok, withApi, type ApiResolver } from "../route-helpers";
+import { appContext, ok, readBody, withApi, type ApiResolver } from "../route-helpers";
 
 import { createBank, listBanks, purgeBank, softDeleteBank, updateBank } from "./service";
 
 /** HTTP handlers for /api/banks — thin wiring over the service, testable with an injected resolver. */
-
-async function body(request: Request): Promise<unknown> {
-  return request.json().catch(() => null);
-}
 
 export function banksApi(resolve: ApiResolver) {
   return {
@@ -15,9 +11,9 @@ export function banksApi(resolve: ApiResolver) {
       return listBanks(ctx, query);
     }, resolve),
 
-    postCreate: withApi(async (ctx, request) => ok(await createBank(ctx, await body(request)), 201), resolve),
+    postCreate: withApi(async (ctx, request) => ok(await createBank(ctx, await readBody(request)), 201), resolve),
 
-    patchUpdate: withApi(async (ctx, request, params) => updateBank(ctx, params.id, await body(request)), resolve),
+    patchUpdate: withApi(async (ctx, request, params) => updateBank(ctx, params.id, await readBody(request)), resolve),
 
     deleteBank: withApi(async (ctx, request, params) => {
       const purge = new URL(request.url).searchParams.get("purge") === "true";

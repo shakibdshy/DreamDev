@@ -2,7 +2,7 @@ import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 import { currentBalance, type BankEntryType } from "@DreamDev/db/domain/balance";
 
-import { HttpError, parseOr422 } from "../http";
+import { HttpError, parseOr422, requireUser } from "../http";
 import { createBankBodySchema, listBanksQuerySchema, updateBankBodySchema } from "./schema";
 
 export interface BanksDeps {
@@ -11,17 +11,19 @@ export interface BanksDeps {
 }
 
 /** Editors and Admins both manage Bank Accounts (spec); Members never log in. */
-function requireManager(session: Session | null) {
-  if (!session?.user) throw new HttpError(401, "Authentication required");
-  if (session.user.status !== "active") throw new HttpError(401, "Session no longer valid");
-  return session.user;
-}
-
 function requireAdmin(session: Session | null) {
-  const user = requireManager(session);
+  const user = requireUser(session);
   if (user.role !== "admin") throw new HttpError(403, "Admin role required");
   return user;
 }
+
+const publicAccount = {
+  id: true,
+  bankName: true,
+  address: true,
+  openingBalance: true,
+  createdAt: true,
+} as const;
 
 export interface BankAccountItem {
   id: string;
@@ -37,7 +39,7 @@ export interface BankAccountItem {
  * Groups every ledger table's live sums per account and folds them through the
  * domain's pure currentBalance — the SQL side of ADR-0002's unified read model.
  */
-export async function balancesByAccount(db: Database, accountIds: string[]): Promise<Map<string, number>> {
+export async function ledgerDeltasByAccount(db: Database, accountIds: string[]): Promise<Map<string, number>> {
   const balances = new Map<string, number>(accountIds.map((id) => [id, 0]));
   const byAccount = new Map<string, { type: BankEntryType; amount: number }[]>();
   const add = (accountId: string | null | undefined, type: BankEntryType, amount: number) => {
@@ -71,7 +73,7 @@ export async function balancesByAccount(db: Database, accountIds: string[]): Pro
 
 /** Paginated list of live accounts with computed Current Balances. */
 export async function listBanks(deps: BanksDeps, query: unknown): Promise<{ data: BankAccountItem[]; meta: { page: number; pageSize: number; total: number } }> {
-  requireManager(deps.session);
+  requireUser(deps.session);
   const { page, pageSize, sort, order } = parseOr422(listBanksQuerySchema, query);
 
   const [accounts, total] = await Promise.all([
@@ -84,7 +86,7 @@ export async function listBanks(deps: BanksDeps, query: unknown): Promise<{ data
     deps.db.bankAccount.count({ where: { deletedAt: null } }),
   ]);
 
-  const balances = await balancesByAccount(
+  const deltas = await ledgerDeltasByAccount(
     deps.db,
     accounts.map((a) => a.id),
   );
@@ -95,7 +97,7 @@ export async function listBanks(deps: BanksDeps, query: unknown): Promise<{ data
       bankName,
       address,
       openingBalance,
-      currentBalance: openingBalance + (balances.get(id) ?? 0),
+      currentBalance: openingBalance + (deltas.get(id) ?? 0),
       createdAt,
     })),
     meta: { page, pageSize, total },
@@ -103,24 +105,25 @@ export async function listBanks(deps: BanksDeps, query: unknown): Promise<{ data
 }
 
 export async function createBank(deps: BanksDeps, body: unknown) {
-  const user = requireManager(deps.session);
+  const user = requireUser(deps.session);
   const input = parseOr422(createBankBodySchema, body);
   return deps.db.bankAccount.create({
     data: { bankName: input.bankName, address: input.address, openingBalance: input.openingBalance, createdBy: user.id },
+    select: publicAccount,
   });
 }
 
 export async function updateBank(deps: BanksDeps, id: string, body: unknown) {
-  const user = requireManager(deps.session);
+  const user = requireUser(deps.session);
   const input = parseOr422(updateBankBodySchema, body);
   const target = await deps.db.bankAccount.findUnique({ where: { id } });
   if (!target || target.deletedAt) throw new HttpError(404, "Bank Account not found");
-  return deps.db.bankAccount.update({ where: { id }, data: { ...input, updatedBy: user.id } });
+  return deps.db.bankAccount.update({ where: { id }, data: { ...input, updatedBy: user.id }, select: publicAccount });
 }
 
 /** Soft-delete hides the account from lists while preserving history. */
 export async function softDeleteBank(deps: BanksDeps, id: string) {
-  requireManager(deps.session);
+  requireUser(deps.session);
   const target = await deps.db.bankAccount.findUnique({ where: { id } });
   if (!target || target.deletedAt) throw new HttpError(404, "Bank Account not found");
   await deps.db.bankAccount.update({ where: { id }, data: { deletedAt: new Date() } });

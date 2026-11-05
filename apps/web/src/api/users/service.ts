@@ -2,7 +2,7 @@ import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 import { hashPassword } from "better-auth/crypto";
 
-import { HttpError, parseOr422 } from "../http";
+import { HttpError, parseOr422, requireUser } from "../http";
 import {
   createUserBodySchema,
   listUsersQuerySchema,
@@ -25,10 +25,9 @@ const publicUser = {
 } as const;
 
 function requireAdmin(session: Session | null) {
-  if (!session?.user) throw new HttpError(401, "Authentication required");
-  if (session.user.status !== "active") throw new HttpError(401, "Session no longer valid");
-  if (session.user.role !== "admin") throw new HttpError(403, "Admin role required");
-  return session.user;
+  const user = requireUser(session);
+  if (user.role !== "admin") throw new HttpError(403, "Admin role required");
+  return user;
 }
 
 /**

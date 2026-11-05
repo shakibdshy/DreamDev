@@ -1,3 +1,5 @@
+import type { Session } from "@DreamDev/auth";
+
 /** Application HTTP error — carries the status the route layer must respond with. */
 export class HttpError extends Error {
   constructor(
@@ -6,6 +8,13 @@ export class HttpError extends Error {
   ) {
     super(message);
   }
+}
+
+/** Any active, authenticated User (Admin or Editor) may proceed. */
+export function requireUser(session: Session | null) {
+  if (!session?.user) throw new HttpError(401, "Authentication required");
+  if (session.user.status !== "active") throw new HttpError(401, "Session no longer valid");
+  return session.user;
 }
 
 /** Parses with a zod schema, throwing a 422 HttpError on invalid input. */
