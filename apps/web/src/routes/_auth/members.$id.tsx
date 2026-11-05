@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
 
+import { todayInDhaka } from "@DreamDev/db/domain/month";
 import { formatTaka } from "@DreamDev/db/domain/money";
 import { Button } from "@DreamDev/ui/components/button";
 
@@ -73,7 +74,7 @@ function MemberDetailPage() {
   };
 
   const onStatus = (status: "active" | "inactive" | "exited") => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayInDhaka();
     act.mutate({ path: `/api/members/${id}/status`, body: { status, date: today } });
   };
 
@@ -109,6 +110,7 @@ function MemberDetailPage() {
             {member.status === "inactive" && (
               <Button variant="outline" size="sm" onClick={() => onStatus("active")}>Reactivate</Button>
             )}
+            <Button variant="outline" size="sm" onClick={() => act.mutate({ path: `/api/members/${id}`, method: "DELETE" })}>Remove</Button>
           </div>
         </div>
       </div>

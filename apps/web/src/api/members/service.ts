@@ -1,6 +1,6 @@
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
-import { monthOfDate } from "@DreamDev/db/domain/month";
+import { compareMonths, monthOfDate } from "@DreamDev/db/domain/month";
 import { projectMonths, type MonthCell } from "@DreamDev/db/domain/projection";
 import { dueSummary, type DueSummary } from "@DreamDev/db/domain/due";
 
@@ -70,7 +70,7 @@ export async function listMembers(deps: MembersDeps, query: unknown) {
 
   const ids = members.map((m) => m.id);
   const [allotments, statusChanges, contributionSums, adjustmentSums] = await Promise.all([
-    ids.length ? deps.db.shareAllotment.findMany({ where: { memberId: { in: ids } } }) : [],
+    ids.length ? deps.db.shareAllotment.findMany({ where: { memberId: { in: ids } }, orderBy: { effectiveMonth: "asc" } }) : [],
     ids.length ? deps.db.memberStatusChange.findMany({ where: { memberId: { in: ids } } }) : [],
     ids.length
       ? deps.db.contribution.groupBy({ by: ["memberId"], _sum: { amount: true }, where: { deletedAt: null, memberId: { in: ids } } })
@@ -212,7 +212,7 @@ export async function updateMember(deps: MembersDeps, id: string, body: unknown)
     if (existing) throw new HttpError(409, "A member with this mobile number already exists");
   }
 
-  return deps.db.member.update({
+  const updated = await deps.db.member.update({
     where: { id },
     data: {
       ...(input.name !== undefined ? { name: input.name } : {}),
@@ -224,6 +224,15 @@ export async function updateMember(deps: MembersDeps, id: string, body: unknown)
     },
     select: publicMember,
   });
+
+  // The first Share Allotment is fixed at joining (GLOSSARY.md) — keep it in sync
+  if (input.joiningDate !== undefined && input.joiningDate !== member.joiningDate.toISOString().slice(0, 10)) {
+    const first = await deps.db.shareAllotment.findFirst({ where: { memberId: id }, orderBy: { effectiveMonth: "asc" } });
+    if (first) {
+      await deps.db.shareAllotment.update({ where: { id: first.id }, data: { effectiveMonth: monthOfDate(updated.joiningDate) } });
+    }
+  }
+  return updated;
 }
 
 /** Admin-only, forward-effective Share quantity change (spec: permission-gated). */
@@ -235,6 +244,9 @@ export async function changeShares(deps: MembersDeps, id: string, body: unknown)
   if (!member || member.deletedAt) throw new HttpError(404, "Member not found");
 
   const effectiveMonth = input.effectiveMonth ?? monthOfDate(new Date());
+  if (compareMonths(effectiveMonth, monthOfDate(new Date())) < 0) {
+    throw new HttpError(422, "Share changes are forward-effective only — past months never change");
+  }
   await deps.db.shareAllotment.create({
     data: { memberId: id, quantity: input.quantity, effectiveMonth, createdBy: user.id },
   });

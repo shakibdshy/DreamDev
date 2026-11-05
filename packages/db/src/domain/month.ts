@@ -44,3 +44,8 @@ export function monthRangeInclusive(from: Month, through: Month): Month[] {
 export function compareMonths(a: Month, b: Month): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
+
+/** Today's date (YYYY-MM-DD) at the Dhaka clock — canonical for user-facing date defaults. */
+export function todayInDhaka(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: DHAKA_TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}

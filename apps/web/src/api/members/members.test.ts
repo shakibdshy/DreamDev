@@ -85,9 +85,10 @@ describe("members", () => {
     expect(listed.data[0]?.advance).toBe(1000);
   });
 
-  test("Share change: Editor forbidden (403); Admin appends forward-effective", async () => {
+  test("Share change: Editor forbidden (403); Admin appends forward-effective; backdating refused", async () => {
     const member = await createMember({ db, session: editor }, memberBody({ shareQuantity: 1 }));
     await expect(changeShares({ db, session: editor }, member.id, { quantity: 2 })).rejects.toMatchObject({ status: 403 });
+    await expect(changeShares({ db, session: admin }, member.id, { quantity: 2, effectiveMonth: addMonths(thisMonth, -1) })).rejects.toMatchObject({ status: 422 });
 
     const change = await changeShares({ db, session: admin }, member.id, { quantity: 2, effectiveMonth: nextMonth });
     expect(change.quantity).toBe(2);

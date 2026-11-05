@@ -24,10 +24,12 @@ export interface StatusChangeRow {
 export async function getPriceEntries(db: Database): Promise<SharePriceEntry[]> {
   const entries = await db.sharePriceEntry.findMany({ orderBy: { effectiveMonth: "asc" } });
   if (entries.length > 0) return entries;
-  const seeded = await db.sharePriceEntry.create({
-    data: { effectiveMonth: "1970-01", price: 5000 },
-  });
-  return [seeded];
+  try {
+    return [await db.sharePriceEntry.create({ data: { effectiveMonth: "1970-01", price: 5000 } })];
+  } catch {
+    // Two first requests raced on the unique key — the winner's row is correct
+    return db.sharePriceEntry.findMany({ orderBy: { effectiveMonth: "asc" } });
+  }
 }
 
 /** Inactive intervals from the status log: each inactive stretch until the next change (open-ended if still inactive). */
