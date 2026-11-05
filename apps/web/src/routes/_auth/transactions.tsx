@@ -1,10 +1,10 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { createCollection, queryCollectionOptions, useLiveQuery } from "@tanstack/react-db";
 import { debounce } from "@tanstack/pacer";
 import { toast } from "sonner";
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { z } from "zod";
 
 import { todayInDhaka } from "@DreamDev/db/domain/month";
@@ -50,6 +50,8 @@ export const Route = createFileRoute("/_auth/transactions")({
 function TransactionsPage() {
   const search = Route.useSearch();
   const navigate = Route.useNavigate();
+  const { session } = Route.useRouteContext();
+  const isAdmin = session?.user.role === "admin" && session.user.status === "active";
 
   // Accumulate patches so two quick filter changes never drop the first
   const pendingPatch = useRef<Record<string, string | undefined>>({});
@@ -117,7 +119,7 @@ function TransactionsPage() {
     <div className="mx-auto flex max-w-6xl flex-col gap-4 p-4">
       <h1 className="text-2xl font-semibold">Transactions</h1>
 
-      <ContributionForm collection={feedCollection} />
+      <EntryForms collection={feedCollection} isAdmin={isAdmin} />
 
       <div className="grid gap-2 rounded-md border p-3 sm:grid-cols-5">
         <select
@@ -166,7 +168,7 @@ function TransactionsPage() {
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">{row.note ?? ""}</td>
                   <td className="px-3 py-2 text-right">
-                    {row.type === "contribution" && (
+                    {(row.type === "contribution" || row.type === "expense" || row.type === "transfer" || row.type === "adjustment") && (
                       <>
                         <Button
                           variant="ghost"
@@ -175,9 +177,18 @@ function TransactionsPage() {
                             const amount = window.prompt("New amount", String(row.amount));
                             if (!amount) return;
                             try {
-                              await feedCollection.update(row.id, (draft) => {
-                                draft.amount = Number(amount);
-                              });
+                              if (row.type === "contribution") {
+                                await feedCollection.update(row.id, (draft) => {
+                                  draft.amount = Number(amount);
+                                });
+                              } else {
+                                await api(`/api/${row.type === "adjustment" ? "adjustments" : `${row.type}s`}/${row.id}`, {
+                                  method: "PATCH",
+                                  body: JSON.stringify({ amount: Number(amount) * (row.type === "adjustment" ? 1 : 1) }),
+                                });
+                                await queryClient.invalidateQueries({ queryKey: ["transactions"] });
+                                await feedCollection.utils.refetch();
+                              }
                             } catch (error) {
                               toast.error((error as Error).message);
                             }
@@ -190,7 +201,14 @@ function TransactionsPage() {
                           size="sm"
                           onClick={async () => {
                             try {
-                              await feedCollection.delete(row.id);
+                              if (row.type === "contribution") {
+                                await feedCollection.delete(row.id);
+                              } else {
+                                const path = row.type === "expense" ? "expenses" : row.type === "transfer" ? "transfers" : "adjustments";
+                                await api(`/api/${path}/${row.id}`, { method: "DELETE" });
+                                await queryClient.invalidateQueries({ queryKey: ["transactions"] });
+                                await feedCollection.utils.refetch();
+                              }
                             } catch (error) {
                               toast.error((error as Error).message);
                             }
@@ -225,6 +243,170 @@ function TransactionsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+const ENTRY_TYPES = ["contribution", "expense", "transfer", "adjustment"] as const;
+type EntryType = (typeof ENTRY_TYPES)[number];
+
+function EntryForms({ collection, isAdmin }: { collection: ReturnType<typeof createCollection<never>>; isAdmin: boolean }) {
+  const [entryType, setEntryType] = useState<EntryType>("contribution");
+  return (
+    <details className="rounded-md border p-3" open>
+      <summary className="cursor-pointer font-medium">New entry</summary>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {ENTRY_TYPES.map((type) => {
+          const disabled = type === "adjustment" && !isAdmin;
+          return (
+            <Button
+              key={type}
+              type="button"
+              size="sm"
+              variant={entryType === type ? "default" : "outline"}
+              disabled={disabled}
+              onClick={() => setEntryType(type)}
+            >
+              {TYPE_LABELS[type]}
+            </Button>
+          );
+        })}
+      </div>
+      <div className="mt-3">
+        {entryType === "contribution" && <ContributionForm collection={collection} />}
+        {entryType === "expense" && <ExpenseForm />}
+        {entryType === "transfer" && <TransferForm />}
+        {entryType === "adjustment" && isAdmin && <AdjustmentForm />}
+      </div>
+    </details>
+  );
+}
+
+/** Shared post-and-invalidate for the secondary entry forms. */
+function useEntryMutation(path: string) {
+  const create = useMutation({
+    mutationFn: (body: unknown) => api(path, { method: "POST", body: JSON.stringify(body) }),
+    onSuccess: async () => {
+      toast.success("Recorded");
+      await queryClient.invalidateQueries({ queryKey: ["transactions"] });
+      await queryClient.invalidateQueries({ queryKey: ["banks"] });
+      await queryClient.invalidateQueries({ queryKey: ["members"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+  return create;
+}
+
+function ExpenseForm() {
+  const create = useEntryMutation("/api/expenses");
+  const [bankAccountId, setBank] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(todayInDhaka());
+  const [note, setNote] = useState("");
+  return (
+    <form
+      className="grid gap-3 sm:grid-cols-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        create.mutate({ bankAccountId, amount: Number(amount), date, note: note || undefined });
+      }}
+    >
+      <div className="flex flex-col gap-1">
+        <Label>Bank Account</Label>
+        <BankSelect value={bankAccountId} onChange={setBank} id="expense-bank" />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="expense-amount">Amount (৳)</Label>
+        <Input id="expense-amount" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="expense-date">Date</Label>
+        <Input id="expense-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="expense-note">Note (optional)</Label>
+        <Input id="expense-note" value={note} onChange={(e) => setNote(e.target.value)} />
+      </div>
+      <div className="sm:col-span-4">
+        <Button type="submit" disabled={!bankAccountId || !amount}>Record Expense</Button>
+        <p className="mt-1 text-xs text-muted-foreground">Bank charges, cash withdrawals — money out that isn't a Loan.</p>
+      </div>
+    </form>
+  );
+}
+
+function TransferForm() {
+  const create = useEntryMutation("/api/transfers");
+  const [fromAccountId, setFrom] = useState("");
+  const [toAccountId, setTo] = useState("");
+  const [amount, setAmount] = useState("");
+  const [date, setDate] = useState(todayInDhaka());
+  return (
+    <form
+      className="grid gap-3 sm:grid-cols-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        create.mutate({ fromAccountId, toAccountId, amount: Number(amount), date });
+      }}
+    >
+      <div className="flex flex-col gap-1">
+        <Label>From account</Label>
+        <BankSelect value={fromAccountId} onChange={setFrom} id="transfer-from" />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label>To account</Label>
+        <BankSelect value={toAccountId} onChange={setTo} id="transfer-to" />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="transfer-amount">Amount (৳)</Label>
+        <Input id="transfer-amount" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="transfer-date">Date</Label>
+        <Input id="transfer-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+      </div>
+      <div className="sm:col-span-4">
+        <Button type="submit" disabled={!fromAccountId || !toAccountId || !amount}>Record Transfer</Button>
+        <p className="mt-1 text-xs text-muted-foreground">Moves money between the team's own accounts — total holdings unchanged.</p>
+      </div>
+    </form>
+  );
+}
+
+function AdjustmentForm() {
+  const create = useEntryMutation("/api/adjustments");
+  const [memberId, setMember] = useState("");
+  const [amount, setAmount] = useState("");
+  const [month, setMonth] = useState("");
+  const [reason, setReason] = useState("");
+  return (
+    <form
+      className="grid gap-3 sm:grid-cols-4"
+      onSubmit={(e) => {
+        e.preventDefault();
+        create.mutate({ memberId, amount: Number(amount), month: month || undefined, reason });
+      }}
+    >
+      <div className="flex flex-col gap-1">
+        <Label>Member</Label>
+        <MemberSelect value={memberId} onChange={setMember} id="adjustment-member" />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="adjustment-amount">Amount (৳, signed)</Label>
+        <Input id="adjustment-amount" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="3000 or -5000" />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="adjustment-month">Month label (optional)</Label>
+        <Input id="adjustment-month" placeholder="YYYY-MM" value={month} onChange={(e) => setMonth(e.target.value)} />
+      </div>
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="adjustment-reason">Reason</Label>
+        <Input id="adjustment-reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="opening due / waived month" />
+      </div>
+      <div className="sm:col-span-4">
+        <Button type="submit" disabled={!memberId || !amount || !reason}>Record Adjustment</Button>
+        <p className="mt-1 text-xs text-muted-foreground">Opening due positive, waiver negative — the honest-correction mechanism (Admins only).</p>
+      </div>
+    </form>
   );
 }
 
