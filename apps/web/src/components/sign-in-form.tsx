@@ -31,6 +31,7 @@ export default function SignInForm({ onSwitchToSignUp }: { onSwitchToSignUp: () 
           onSuccess: () => {
             navigate({
               to: "/dashboard",
+              search: {},
             });
             toast.success("Sign in successful");
           },

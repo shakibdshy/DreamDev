@@ -1,7 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { createCollection, queryCollectionOptions, useLiveQuery } from "@tanstack/react-db";
 import { debounce } from "@tanstack/pacer";
 import { toast } from "sonner";
 import { useMemo, useRef, useState } from "react";
@@ -68,58 +67,77 @@ function TransactionsPage() {
     [navigate],
   );
 
-  // The TanStack DB collection: optimistic CRUD with automatic rollback (ticket pattern).
-  const feedCollection = useMemo(
-    () =>
-      createCollection(
-        queryCollectionOptions({
-          queryKey: ["transactions", search],
-          queryClient,
-          queryFn: () =>
-            api<{ data: FeedRow[] }>(
-              `/api/transactions?${new URLSearchParams(Object.entries(search).map(([k, v]) => [k, String(v)]) as [string, string][])}`,
-            ),
-          getKey: (row: FeedRow) => row.id,
-          onInsert: async ({ transaction, collection }) => {
-            const row = transaction.mutations[0]!.modified as Record<string, unknown>;
-            await api("/api/contributions", {
-              method: "POST",
-              body: JSON.stringify({
-                memberId: row.memberId,
-                bankAccountId: row.bankAccountId,
-                amount: row.amount,
-                creditDate: row.creditDate,
-                note: row.note ?? undefined,
-              }),
-            });
-            await collection.utils.refetch();
-          },
-          onUpdate: async ({ transaction, collection }) => {
-            for (const mutation of transaction.mutations) {
-              const row = mutation.modified as FeedRow;
-              await api(`/api/contributions/${row.id}`, { method: "PATCH", body: JSON.stringify({ amount: row.amount }) });
-            }
-            await collection.utils.refetch();
-          },
-          onDelete: async ({ transaction, collection }) => {
-            for (const mutation of transaction.mutations) {
-              await api(`/api/contributions/${mutation.original.id}`, { method: "DELETE" });
-            }
-            await collection.utils.refetch();
-          },
-        }),
+  const feedQueryKey = ["transactions", search] as const;
+  const feedQuery = useQuery({
+    queryKey: feedQueryKey,
+    queryFn: () =>
+      api<{ data: FeedRow[] }>(
+        `/api/transactions?${new URLSearchParams(Object.entries(search).map(([k, v]) => [k, String(v)]) as [string, string][])}`,
       ),
-    [search],
-  );
+  });
+  const rows: FeedRow[] = feedQuery.data?.data ?? [];
 
-  const { data: feed } = useLiveQuery({ collection: feedCollection });
-  const rows: FeedRow[] = feed?.state === "loading" && !feed.data ? [] : (feed?.data as FeedRow[] | undefined) ?? [];
+  const pathFor = (type: string) =>
+    type === "contribution" ? "contributions" : type === "expense" ? "expenses" : type === "transfer" ? "transfers" : "adjustments";
+
+  const afterChange = async () => {
+    await queryClient.invalidateQueries({ queryKey: ["transactions"] });
+    await queryClient.invalidateQueries({ queryKey: ["banks"] });
+    await queryClient.invalidateQueries({ queryKey: ["members"] });
+    await queryClient.invalidateQueries({ queryKey: ["position"] });
+  };
+
+  /** Optimistic CRUD on the Query cache: instant row change, rollback + toast on failure. */
+  const createContribution = useMutation({
+    mutationFn: (values: { memberId: string; bankAccountId: string; amount: number; creditDate: string; note?: string }) =>
+      api<{ id: string }>("/api/contributions", { method: "POST", body: JSON.stringify(values) }),
+    onSuccess: async () => {
+      toast.success("Contribution recorded");
+      await afterChange();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const editEntry = useMutation({
+    mutationFn: ({ row, amount }: { row: FeedRow; amount: number }) =>
+      api(`/api/${pathFor(row.type)}/${row.id}`, { method: "PATCH", body: JSON.stringify({ amount }) }),
+    onMutate: async ({ row, amount }) => {
+      await queryClient.cancelQueries({ queryKey: feedQueryKey });
+      const previous = queryClient.getQueryData<{ data: FeedRow[] }>(feedQueryKey);
+      queryClient.setQueryData<{ data: FeedRow[] }>(feedQueryKey, (old) =>
+        old ? { ...old, data: old.data.map((r) => (r.id === row.id ? { ...r, amount } : r)) } : old,
+      );
+      return { previous };
+    },
+    onError: (error: Error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(feedQueryKey, context.previous);
+      toast.error(error.message);
+    },
+    onSettled: afterChange,
+  });
+
+  const deleteEntry = useMutation({
+    mutationFn: (row: FeedRow) => api(`/api/${pathFor(row.type)}/${row.id}`, { method: "DELETE" }),
+    onMutate: async (row) => {
+      await queryClient.cancelQueries({ queryKey: feedQueryKey });
+      const previous = queryClient.getQueryData<{ data: FeedRow[] }>(feedQueryKey);
+      queryClient.setQueryData<{ data: FeedRow[] }>(feedQueryKey, (old) =>
+        old ? { ...old, data: old.data.filter((r) => r.id !== row.id) } : old,
+      );
+      return { previous };
+    },
+    onError: (error: Error, _row, context) => {
+      if (context?.previous) queryClient.setQueryData(feedQueryKey, context.previous);
+      toast.error(error.message);
+    },
+    onSettled: afterChange,
+  });
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4 p-4">
       <h1 className="text-2xl font-semibold">Transactions</h1>
 
-      <EntryForms collection={feedCollection} isAdmin={isAdmin} />
+      <EntryForms onCreateContribution={createContribution.mutateAsync} isAdmin={isAdmin} />
 
       <div className="grid gap-2 rounded-md border p-3 sm:grid-cols-5">
         <select
@@ -173,25 +191,10 @@ function TransactionsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={async () => {
+                          onClick={() => {
                             const amount = window.prompt("New amount", String(row.amount));
                             if (!amount) return;
-                            try {
-                              if (row.type === "contribution") {
-                                await feedCollection.update(row.id, (draft) => {
-                                  draft.amount = Number(amount);
-                                });
-                              } else {
-                                await api(`/api/${row.type === "adjustment" ? "adjustments" : `${row.type}s`}/${row.id}`, {
-                                  method: "PATCH",
-                                  body: JSON.stringify({ amount: Number(amount) * (row.type === "adjustment" ? 1 : 1) }),
-                                });
-                                await queryClient.invalidateQueries({ queryKey: ["transactions"] });
-                                await feedCollection.utils.refetch();
-                              }
-                            } catch (error) {
-                              toast.error((error as Error).message);
-                            }
+                            editEntry.mutate({ row, amount: Number(amount) });
                           }}
                         >
                           Edit
@@ -199,20 +202,7 @@ function TransactionsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={async () => {
-                            try {
-                              if (row.type === "contribution") {
-                                await feedCollection.delete(row.id);
-                              } else {
-                                const path = row.type === "expense" ? "expenses" : row.type === "transfer" ? "transfers" : "adjustments";
-                                await api(`/api/${path}/${row.id}`, { method: "DELETE" });
-                                await queryClient.invalidateQueries({ queryKey: ["transactions"] });
-                                await feedCollection.utils.refetch();
-                              }
-                            } catch (error) {
-                              toast.error((error as Error).message);
-                            }
-                          }}
+                          onClick={() => deleteEntry.mutate(row)}
                         >
                           Delete
                         </Button>
@@ -249,7 +239,9 @@ function TransactionsPage() {
 const ENTRY_TYPES = ["contribution", "expense", "transfer", "adjustment"] as const;
 type EntryType = (typeof ENTRY_TYPES)[number];
 
-function EntryForms({ collection, isAdmin }: { collection: ReturnType<typeof createCollection<never>>; isAdmin: boolean }) {
+type CreateContribution = (values: { memberId: string; bankAccountId: string; amount: number; creditDate: string; note?: string }) => Promise<unknown>;
+
+function EntryForms({ onCreateContribution, isAdmin }: { onCreateContribution: CreateContribution; isAdmin: boolean }) {
   const [entryType, setEntryType] = useState<EntryType>("contribution");
   return (
     <details className="rounded-md border p-3" open>
@@ -272,7 +264,7 @@ function EntryForms({ collection, isAdmin }: { collection: ReturnType<typeof cre
         })}
       </div>
       <div className="mt-3">
-        {entryType === "contribution" && <ContributionForm collection={collection} />}
+        {entryType === "contribution" && <ContributionForm onCreate={onCreateContribution} />}
         {entryType === "expense" && <ExpenseForm />}
         {entryType === "transfer" && <TransferForm />}
         {entryType === "adjustment" && isAdmin && <AdjustmentForm />}
@@ -410,39 +402,53 @@ function AdjustmentForm() {
   );
 }
 
-function ContributionForm({ collection }: { collection: ReturnType<typeof createCollection<never>> }) {
-  const form = useForm({
-    defaultValues: { memberId: "", bankAccountId: "", amount: "", creditDate: todayInDhaka(), note: "" },
-    onSubmit: async ({ value }) => {
-      try {
-        await collection.insert({
-          ...value,
-          id: `optimistic-${crypto.randomUUID()}`,
-          type: "contribution",
-          date: value.creditDate,
-          amount: Number(value.amount),
-          memberName: null,
-          bankName: null,
-          toBankName: null,
-          note: value.note || null,
-        } as FeedRow & Record<string, unknown>);
-        toast.success("Contribution recorded");
-        form.reset();
-        // optimistically refresh balances and member positions
-        await queryClient.invalidateQueries({ queryKey: ["banks"] });
-        await queryClient.invalidateQueries({ queryKey: ["members"] });
-        await queryClient.invalidateQueries({ queryKey: ["position"] });
-      } catch (error) {
-        toast.error((error as Error).message);
-      }
-    },
-  });
-
-  const memberId = form.useStore((state) => state.values.memberId);
+/** Disabled Due field fed by the member position endpoint (spec). */
+function DueDisplay({ memberId }: { memberId: string }) {
   const positionQuery = useQuery({
     queryKey: ["position", memberId],
     queryFn: () => api<{ due: number; advance: number; shares: number; sharePrice: number }>(`/api/members/${memberId}/position`),
     enabled: memberId !== "",
+  });
+  return (
+    <div className="flex flex-col gap-1">
+      <Label htmlFor="t-due">Current Due</Label>
+      <Input
+        id="t-due"
+        disabled
+        value={
+          positionQuery.data
+            ? positionQuery.data.advance > 0
+              ? `Advance ${formatTaka(positionQuery.data.advance)}`
+              : formatTaka(positionQuery.data.due)
+            : "—"
+        }
+      />
+      {positionQuery.data && (
+        <p className="text-xs text-muted-foreground">
+          {positionQuery.data.shares} share(s) × {formatTaka(positionQuery.data.sharePrice)}/month
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ContributionForm({ onCreate }: { onCreate: CreateContribution }) {
+  const form = useForm({
+    defaultValues: { memberId: "", bankAccountId: "", amount: "", creditDate: todayInDhaka(), note: "" },
+    onSubmit: async ({ value }) => {
+      try {
+        await onCreate({
+          memberId: value.memberId,
+          bankAccountId: value.bankAccountId,
+          amount: Number(value.amount),
+          creditDate: value.creditDate,
+          note: value.note || undefined,
+        });
+        form.reset();
+      } catch {
+        // toast already surfaced by the mutation
+      }
+    },
   });
 
   return (
@@ -484,25 +490,9 @@ function ContributionForm({ collection }: { collection: ReturnType<typeof create
             </div>
           )}
         </form.Field>
-        <div className="flex flex-col gap-1">
-          <Label htmlFor="t-due">Current Due</Label>
-          <Input
-            id="t-due"
-            disabled
-            value={
-              positionQuery.data
-                ? positionQuery.data.advance > 0
-                  ? `Advance ${formatTaka(positionQuery.data.advance)}`
-                  : formatTaka(positionQuery.data.due)
-                : "—"
-            }
-          />
-          {positionQuery.data && (
-            <p className="text-xs text-muted-foreground">
-              {positionQuery.data.shares} share(s) × {formatTaka(positionQuery.data.sharePrice)}/month
-            </p>
-          )}
-        </div>
+        <form.Subscribe selector={(s) => s.values.memberId}>
+          {(memberId) => <DueDisplay memberId={memberId} />}
+        </form.Subscribe>
         <form.Field name="note">
           {(field) => (
             <div className="flex flex-col gap-1">

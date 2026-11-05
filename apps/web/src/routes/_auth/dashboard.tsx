@@ -17,7 +17,7 @@ import { api } from "@/lib/api";
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export const Route = createFileRoute("/_auth/dashboard")({
-  validateSearch: (search: Record<string, unknown>) => ({ year: search.year ? Number(search.year) : undefined }),
+  validateSearch: (search: Record<string, unknown>): { year?: number } => ({ year: search.year ? Number(search.year) : undefined }),
   component: DashboardPage,
 });
 

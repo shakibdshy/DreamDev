@@ -4,10 +4,10 @@ import { toast } from "sonner";
 import { useState } from "react";
 
 import { todayInDhaka } from "@DreamDev/db/domain/month";
-import { useForm } from "@tanstack/react-form";
 import { formatTaka } from "@DreamDev/db/domain/money";
 import { BankSelect } from "@/components/bank-select";
 import { Button } from "@DreamDev/ui/components/button";
+import { Input } from "@DreamDev/ui/components/input";
 
 import { api } from "@/lib/api";
 
@@ -32,7 +32,7 @@ interface MemberDetail {
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 export const Route = createFileRoute("/_auth/members/$id")({
-  validateSearch: (search: Record<string, unknown>) => ({ year: search.year ? Number(search.year) : undefined }),
+  validateSearch: (search: Record<string, unknown>): { year?: number } => ({ year: search.year ? Number(search.year) : undefined }),
   component: MemberDetailPage,
 });
 
@@ -179,9 +179,9 @@ function MemberDetailPage() {
         <div className="mb-2 flex items-center justify-between">
           <h2 className="font-semibold">{timelineYear} billing timeline</h2>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => navigate({ search: (prev) => ({ ...prev, year: timelineYear - 1 }) })>←</Button>
+            <Button variant="outline" size="sm" onClick={() => navigate({ search: (prev) => ({ ...prev, year: timelineYear - 1 }) })}>←</Button>
             <span className="text-sm">{timelineYear}</span>
-            <Button variant="outline" size="sm" onClick={() => navigate({ search: (prev) => ({ ...prev, year: timelineYear + 1 }) })>→</Button>
+            <Button variant="outline" size="sm" onClick={() => navigate({ search: (prev) => ({ ...prev, year: timelineYear + 1 }) })}>→</Button>
           </div>
         </div>
         <div className="grid grid-cols-4 gap-2 sm:grid-cols-6 md:grid-cols-12">
@@ -219,6 +219,7 @@ interface LoanRowView {
 
 function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => void }) {
   const [repayBank, setRepayBank] = useState("");
+  const queryClient = useQueryClient();
   const loansQuery = useQuery({
     queryKey: ["loans", memberId],
     queryFn: () => api<{ loans: LoanRowView[]; totalOutstanding: number }>(`/api/members/${memberId}/loans`),
@@ -314,47 +315,56 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
 }
 
 function NewLoanForm({ memberId, onSaved }: { memberId: string; onSaved: () => void }) {
-  const form = useForm({
-    defaultValues: { amount: "", bankAccountId: "", date: todayInDhaka(), note: "" },
-    onSubmit: async ({ value }) => {
-      try {
-        const result = await api<{ warning: string | null }>("/api/members/" + memberId + "/loans", {
-          method: "POST",
-          body: JSON.stringify({ amount: Number(value.amount), bankAccountId: value.bankAccountId, date: value.date, note: value.note || undefined }),
-        });
-        toast.success("Loan recorded");
-        if (result.warning) toast.warning(result.warning);
-        form.reset();
-        onSaved();
-      } catch (error) {
-        toast.error((error as Error).message);
-      }
-    },
-  });
+  const queryClient = useQueryClient();
+  const [amount, setAmount] = useState("");
+  const [bankAccountId, setBankAccountId] = useState("");
+  const [date, setDate] = useState(todayInDhaka());
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const result = await api<{ warning: string | null }>(`/api/members/${memberId}/loans`, {
+        method: "POST",
+        body: JSON.stringify({ amount: Number(amount), bankAccountId, date, note: note || undefined }),
+      });
+      toast.success("Loan recorded");
+      if (result.warning) toast.warning(result.warning);
+      setAmount("");
+      setNote("");
+      onSaved();
+      queryClient.invalidateQueries({ queryKey: ["loans", memberId] });
+    } catch (error) {
+      toast.error((error as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <details className="mt-3 rounded-md border p-2">
       <summary className="cursor-pointer text-sm font-medium">New Loan</summary>
-      <form className="mt-2 grid gap-3 sm:grid-cols-4" onSubmit={(e) => { e.preventDefault(); form.handleSubmit(); }}>
+      <form className="mt-2 grid gap-3 sm:grid-cols-4" onSubmit={submit}>
         <div className="flex flex-col gap-1">
           <label className="text-sm">Amount (৳)</label>
-          <Input inputMode="numeric" value={form.useStore((s) => s.values.amount)}
-            onChange={(e) => form.setFieldValue("amount", e.target.value)} />
+          <Input inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value)} />
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-sm">Bank Account</label>
-          <BankSelect value={form.useStore((s) => s.values.bankAccountId)} onChange={(v) => form.setFieldValue("bankAccountId", v)} />
+          <BankSelect value={bankAccountId} onChange={setBankAccountId} id="new-loan-bank" />
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-sm">Date</label>
-          <Input type="date" value={form.useStore((s) => s.values.date)} onChange={(e) => form.setFieldValue("date", e.target.value)} />
+          <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
         </div>
         <div className="flex flex-col gap-1">
           <label className="text-sm">Note (optional)</label>
-          <Input value={form.useStore((s) => s.values.note)} onChange={(e) => form.setFieldValue("note", e.target.value)} />
+          <Input value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
         <div className="sm:col-span-4">
-          <Button type="submit" disabled={form.useStore((s) => !s.canSubmit)}>Give Loan</Button>
+          <Button type="submit" disabled={saving || !amount || !bankAccountId}>Give Loan</Button>
           <p className="mt-1 text-xs text-muted-foreground">Loans over twice the Member's total contributions warn but record anyway.</p>
         </div>
       </form>
