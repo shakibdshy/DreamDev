@@ -22,6 +22,8 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "check-types": "turbo run check-types",
+    "test": "turbo run test",
+    "db:seed": "bun run --cwd packages/db src/seed.ts",
     "db:push": "turbo run db:push -F @DreamDev/db --",
     "db:studio": "turbo run db:studio -F @DreamDev/db --",
     "db:generate": "turbo run db:generate -F @DreamDev/db --",

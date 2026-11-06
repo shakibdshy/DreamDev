@@ -1,6 +1,7 @@
 {
   "extends": "@DreamDev/config/tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true
+    "noEmit": true,
+    "types": ["node", "bun"]
   }
 }

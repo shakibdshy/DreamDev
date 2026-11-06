@@ -1,26 +1,26 @@
 import { Button } from "@DreamDev/ui/components/button";
 import { Input } from "@DreamDev/ui/components/input";
-import { Label } from "@DreamDev/ui/components/label";
 import { useForm } from "@tanstack/react-form";
 import { useNavigate } from "@tanstack/react-router";
+import { EyeIcon, EyeOffIcon } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 import z from "zod";
 
+import { Field } from "./field";
 import { authClient } from "@/lib/auth-client";
-
-import Loader from "./loader";
+import { firstError } from "@/lib/form-errors";
 
 export default function SignUpForm({ onSwitchToSignIn }: { onSwitchToSignIn: () => void }) {
-  const navigate = useNavigate({
-    from: "/",
-  });
+  const navigate = useNavigate();
   const { isPending } = authClient.useSession();
+  const [showPassword, setShowPassword] = useState(false);
 
   const form = useForm({
     defaultValues: {
+      name: "",
       email: "",
       password: "",
-      name: "",
     },
     onSubmit: async ({ value }) => {
       await authClient.signUp.email(
@@ -31,10 +31,8 @@ export default function SignUpForm({ onSwitchToSignIn }: { onSwitchToSignIn: () 
         },
         {
           onSuccess: () => {
-            navigate({
-              to: "/dashboard",
-            });
-            toast.success("Sign up successful");
+            navigate({ to: "/dashboard", search: {} });
+            toast.success("Account created");
           },
           onError: (error) => {
             toast.error(error.error.message || error.error.statusText);
@@ -51,110 +49,98 @@ export default function SignUpForm({ onSwitchToSignIn }: { onSwitchToSignIn: () 
     },
   });
 
-  if (isPending) {
-    return <Loader />;
-  }
-
   return (
-    <div className="mx-auto w-full mt-10 max-w-md p-6">
-      <h1 className="mb-6 text-center text-3xl font-bold">Create Account</h1>
+    <div className="space-y-7">
+      <div>
+        <p className="text-micro text-primary">First time here</p>
+        <h1 className="mt-2 font-display text-3xl leading-tight">Create your login</h1>
+        <p className="mt-2 text-sm text-muted-foreground">Logins manage the ledger. Members are records — they never sign in.</p>
+      </div>
 
       <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
+        onSubmit={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
           form.handleSubmit();
         }}
         className="space-y-4"
+        noValidate
       >
-        <div>
-          <form.Field name="name">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>Name</Label>
+        <form.Field name="name">
+          {(field) => (
+            <Field label="Name" htmlFor={field.name} error={firstError(field.state.meta.errors)} required>
+              <Input
+                id={field.name}
+                name={field.name}
+                autoComplete="name"
+                placeholder="Your name"
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(event) => field.handleChange(event.target.value)}
+              />
+            </Field>
+          )}
+        </form.Field>
+
+        <form.Field name="email">
+          {(field) => (
+            <Field label="Email" htmlFor={field.name} error={firstError(field.state.meta.errors)} required>
+              <Input
+                id={field.name}
+                name={field.name}
+                type="email"
+                autoComplete="email"
+                placeholder="you@team.fund"
+                value={field.state.value}
+                onBlur={field.handleBlur}
+                onChange={(event) => field.handleChange(event.target.value)}
+              />
+            </Field>
+          )}
+        </form.Field>
+
+        <form.Field name="password">
+          {(field) => (
+            <Field label="Password" htmlFor={field.name} error={firstError(field.state.meta.errors)} hint="At least 8 characters." required>
+              <div className="relative">
                 <Input
                   id={field.name}
                   name={field.name}
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
                   value={field.state.value}
                   onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                  className="pr-10"
                 />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-red-500">
-                    {error?.message}
-                  </p>
-                ))}
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className="absolute top-1/2 right-1.5 grid size-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {showPassword ? <EyeOffIcon className="size-4" /> : <EyeIcon className="size-4" />}
+                </button>
               </div>
-            )}
-          </form.Field>
-        </div>
+            </Field>
+          )}
+        </form.Field>
 
-        <div>
-          <form.Field name="email">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>Email</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  type="email"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-red-500">
-                    {error?.message}
-                  </p>
-                ))}
-              </div>
-            )}
-          </form.Field>
-        </div>
-
-        <div>
-          <form.Field name="password">
-            {(field) => (
-              <div className="space-y-2">
-                <Label htmlFor={field.name}>Password</Label>
-                <Input
-                  id={field.name}
-                  name={field.name}
-                  type="password"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(e) => field.handleChange(e.target.value)}
-                />
-                {field.state.meta.errors.map((error) => (
-                  <p key={error?.message} className="text-red-500">
-                    {error?.message}
-                  </p>
-                ))}
-              </div>
-            )}
-          </form.Field>
-        </div>
-
-        <form.Subscribe
-          selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}
-        >
+        <form.Subscribe selector={(state) => ({ canSubmit: state.canSubmit, isSubmitting: state.isSubmitting })}>
           {({ canSubmit, isSubmitting }) => (
-            <Button type="submit" className="w-full" disabled={!canSubmit || isSubmitting}>
-              {isSubmitting ? "Submitting..." : "Sign Up"}
+            <Button type="submit" size="lg" className="w-full" disabled={!canSubmit || isSubmitting || isPending}>
+              {isSubmitting ? "Creating…" : "Create account"}
             </Button>
           )}
         </form.Subscribe>
       </form>
 
-      <div className="mt-4 text-center">
-        <Button
-          variant="link"
-          onClick={onSwitchToSignIn}
-          className="text-indigo-600 hover:text-indigo-800"
-        >
-          Already have an account? Sign In
-        </Button>
-      </div>
+      <p className="text-sm text-muted-foreground">
+        Already have an account?{" "}
+        <button type="button" onClick={onSwitchToSignIn} className="font-medium text-primary underline-offset-4 hover:underline">
+          Sign in
+        </button>
+      </p>
     </div>
   );
 }

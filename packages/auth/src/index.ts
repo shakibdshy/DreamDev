@@ -6,7 +6,13 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 export type AuthConfig = {
   BETTER_AUTH_URL: string;
   BETTER_AUTH_SECRET: string;
+  /** Tests only: they sign in repeatedly and would trip the rate limiter. */
+  disableRateLimit?: boolean;
 };
+
+/** Roles per the spec: Admin manages everything, Editor manages fund data only. */
+export const USER_ROLES = ["admin", "editor"] as const;
+export type UserRole = (typeof USER_ROLES)[number];
 
 export function createAuth(env: AuthConfig, database: Database) {
   return betterAuth({
@@ -17,7 +23,37 @@ export function createAuth(env: AuthConfig, database: Database) {
     emailAndPassword: { enabled: true },
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL,
+    rateLimit: env.disableRateLimit ? { enabled: false } : undefined,
     plugins: [tanstackStartCookies()],
+    user: {
+      additionalFields: {
+        role: { type: "string", defaultValue: "editor", input: false },
+        status: { type: "string", defaultValue: "active", input: false },
+      },
+    },
+    databaseHooks: {
+      user: {
+        create: {
+          async before(user) {
+            // The first ever User becomes Admin; everyone after starts as Editor.
+            const userCount = await database.user.count();
+            return { data: { ...user, role: userCount === 0 ? "admin" : "editor" } };
+          },
+        },
+      },
+      session: {
+        create: {
+          async before(session) {
+            // Deactivated Users cannot open sessions — blocks sign-in and refresh alike.
+            const user = await database.user.findUnique({
+              where: { id: session.userId },
+              select: { status: true },
+            });
+            return user?.status === "active" ? { data: session } : false;
+          },
+        },
+      },
+    },
   });
 }
 
