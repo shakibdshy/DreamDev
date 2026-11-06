@@ -1,12 +1,11 @@
-import { chatParamsFromRequest } from "@tanstack/ai";
+import type { AnyTextAdapter } from "@tanstack/ai";
 
 import type { Session } from "@DreamDev/auth";
 
-import type { AnyTextAdapter } from "@tanstack/ai";
-
 import { agentStream, ensureConversation, RateLimitError, createRateLimiter } from "@/agent/agent";
+import { contributionPreview } from "@/agent/tools";
+import { previewDelete, previewWrite } from "@/agent/write-tools";
 import type { TelegramClient } from "./client";
-import { HttpError } from "../api/http";
 
 /**
  * The Telegram transport for the fund agent (ticket 6/8): linked users chat
@@ -137,12 +136,34 @@ export async function handleAgentMessage(deps: AgentBridgeDeps, chatId: string, 
         expiresAt: new Date(Date.now() + APPROVAL_TTL_MINUTES * 60_000),
       },
     });
+    // Guardrail 5: the card shows canonical values read from the DB, never the model's text.
     const label = pause.toolName === "delete_record" ? "Delete this record?" : pause.toolName === "record_contribution" ? "Record this contribution?" : "Apply this change?";
-    await client.sendMessage(chatId, `${label}\n\n${reply || "The confirm card is waiting for your answer."}`.trim(), { replyMarkup: approvalKeyboard });
+    const lines = await canonicalLines(db, session, user.role === "admin" ? "admin" : "editor", JSON.parse(pause.argsJson), pause.toolName);
+    const body = lines ? [label, "", ...lines].join("\n") : `${label}\n\nReview it in the dashboard chat before approving if unsure.`;
+    await client.sendMessage(chatId, body, { replyMarkup: approvalKeyboard });
     return;
   }
 
   await client.sendMessage(chatId, reply || "I couldn't complete that — please try again.");
+}
+
+/** Canonical preview lines for a paused call, computed from the DB — or null when unknown. */
+async function canonicalLines(db: import("@DreamDev/db").Database, session: Session, role: "admin" | "editor", args: { entity?: string; action?: string; id?: string; args?: Record<string, unknown>; memberId?: string; bankAccountId?: string; amount?: number; creditDate?: string }, toolName: string): Promise<string[] | null> {
+  try {
+    if (toolName === "delete_record" && args.entity && args.id) {
+      return (await previewDelete({ db, session }, role, { entity: args.entity as never, id: args.id })).lines;
+    }
+    if (toolName === "write_record" && args.entity && args.action) {
+      return (await previewWrite({ db, session }, role, args as never)).lines;
+    }
+    if (toolName === "record_contribution" && args.memberId && args.bankAccountId && typeof args.amount === "number" && typeof args.creditDate === "string") {
+      const preview = await contributionPreview({ db, session, memberId: args.memberId, bankAccountId: args.bankAccountId, amount: args.amount, creditDate: args.creditDate });
+      return [`${preview.memberName}: ৳${preview.amount.toLocaleString("en-IN")}`, `Credit Date ${preview.creditDate} — ${preview.bankName}`, preview.dueAfter > 0 ? `Due after: ৳${preview.dueAfter.toLocaleString("en-IN")}` : preview.advanceAfter > 0 ? `Advance after: ৳${preview.advanceAfter.toLocaleString("en-IN")}` : "Settled after"];
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 /** ✅/✖ callback: resumes the paused run or reports expiry. */
@@ -170,7 +191,7 @@ export async function handleApprovalCallback(deps: AgentBridgeDeps, chatId: stri
   const session = sessionFromUser(user);
   const ctx = { db, session, channel: "telegram" as const };
   const snapshot = JSON.parse(pending.messagesJson);
-  const { text: reply } = await runTurn(
+  const { text: reply, pause: pauseAgain } = await runTurn(
     agentStream({
       ctx,
       params: {
@@ -187,8 +208,27 @@ export async function handleApprovalCallback(deps: AgentBridgeDeps, chatId: stri
 
   await db.agentPausedApproval.delete({ where: { id: pending.id } });
   await client.answerCallbackQuery(callbackQueryId, approved ? "Approved." : "Cancelled.");
+
+  // The resume may itself pause on another gated call — re-arm the keyboard.
+  if (pauseAgain && pauseAgain.messages) {
+    await db.agentPausedApproval.create({
+      data: {
+        chatId,
+        userId: user.id,
+        threadId: pending.threadId,
+        interruptId: pauseAgain.interruptId,
+        interruptedRunId: pauseAgain.interruptedRunId,
+        toolName: pauseAgain.toolName,
+        argsJson: pauseAgain.argsJson,
+        messagesJson: JSON.stringify(pauseAgain.messages),
+        expiresAt: new Date(Date.now() + APPROVAL_TTL_MINUTES * 60_000),
+      },
+    });
+    const lines = await canonicalLines(db, session, user.role === "admin" ? "admin" : "editor", JSON.parse(pauseAgain.argsJson), pauseAgain.toolName);
+    const label = pauseAgain.toolName === "delete_record" ? "Delete this record?" : pauseAgain.toolName === "record_contribution" ? "Record this contribution?" : "Apply this change?";
+    await client.sendMessage(chatId, [label, ...(lines ? ["", ...lines] : [])].join("\n"), { replyMarkup: approvalKeyboard });
+    return;
+  }
+
   await client.sendMessage(chatId, reply || (approved ? "Done." : "Cancelled — nothing was recorded."));
 }
-
-/** Re-exported for webhook wiring. */
-export { HttpError, chatParamsFromRequest };

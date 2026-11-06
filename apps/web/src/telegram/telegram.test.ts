@@ -352,8 +352,8 @@ describe("member pairing (ticket 2/8)", () => {
     // admin session works (no telegram config needed for these two)
     const adminDeps = { db, session: adminSession };
     expect(await unlinkMemberRoute(adminDeps, member.id)).toEqual({ linked: false });
-    expect(await setMemberNotifyRoute(adminDeps, member.id, true)).toEqual({ notifyEnabled: true });
-    expect(await setMemberNotifyRoute(adminDeps, member.id, false)).toEqual({ notifyEnabled: false });
+    expect(await setMemberNotifyRoute(adminDeps, member.id, { notifyEnabled: true })).toEqual({ notifyEnabled: true });
+    expect(await setMemberNotifyRoute(adminDeps, member.id, { notifyEnabled: false })).toEqual({ notifyEnabled: false });
 
     const statusBody = await memberTelegramStatus(adminDeps, member.id);
     expect(statusBody.notifyEnabled).toBe(false);

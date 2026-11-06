@@ -127,7 +127,7 @@ async function currentPrice(db: Database): Promise<number> {
 
 /** "Due: ৳X" or "Advance: ৳Y" — computed with the fund's own domain math. */
 async function runningPosition(db: Database, memberId: string): Promise<string | null> {
-  const { memberFacts, getPriceEntries } = await import("@/api/members/billing-facts");
+  const { memberFacts, getPriceEntries, toMemberEntries } = await import("@/api/members/billing-facts");
   const { dueSummary } = await import("@DreamDev/db/domain/due");
   const { monthOfDate } = await import("@DreamDev/db/domain/month");
   const member = await db.member.findUnique({ where: { id: memberId } });
@@ -140,10 +140,7 @@ async function runningPosition(db: Database, memberId: string): Promise<string |
     db.adjustment.findMany({ where: { memberId, deletedAt: null } }),
   ]);
   const facts = memberFacts(member, allotments, prices, statusChanges);
-  const entries = [
-    ...contributions.map((c) => ({ date: day(c.creditDate), amount: c.amount, kind: "contribution" as const })),
-    ...adjustments.map((a) => ({ date: day(a.createdAt), amount: a.amount, kind: "adjustment" as const })),
-  ];
+  const entries = toMemberEntries(contributions, adjustments); // same month rule as the dashboard
   const summary = dueSummary(facts, entries, monthOfDate(new Date()));
   return summary.due > 0 ? `Your Due: ${taka(summary.due)}` : summary.advance > 0 ? `Your Advance: ${taka(summary.advance)}` : "You are settled";
 }

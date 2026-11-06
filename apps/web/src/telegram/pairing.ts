@@ -49,13 +49,17 @@ export interface ConsumedPairing {
   targetId: string;
 }
 
-/** Consumes a valid, unused, unexpired code — exactly once. Null when invalid. */
+/** Consumes a valid, unused, unexpired code — atomically, exactly once. Null when invalid. */
 export async function consumePairingCode(db: Database, code: string): Promise<ConsumedPairing | null> {
   const row = await db.telegramPairingCode.findUnique({ where: { code } });
   if (!row) return null;
-  if (row.usedAt) return null;
   if (row.expiresAt.getTime() < Date.now()) return null;
-  await db.telegramPairingCode.update({ where: { id: row.id }, data: { usedAt: new Date() } });
+  // Conditional update: two concurrent /start calls race here — one wins.
+  const consumed = await db.telegramPairingCode.updateMany({
+    where: { id: row.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+  if (consumed.count === 0) return null;
   return { targetType: row.targetType as PairingTargetType, targetId: row.targetId };
 }
 

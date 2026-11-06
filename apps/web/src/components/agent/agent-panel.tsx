@@ -160,13 +160,14 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                       </div>
                     </dl>
                   ) : (
-                    <p className="mt-2 text-xs text-muted-foreground">Check the values before approving.</p>
+                    <p className="mt-2 text-xs text-muted-foreground">Waiting for the canonical preview — approve unlocks once it arrives.</p>
                   )}
                   <div className="mt-3 flex gap-2">
                     <Button
                       size="sm"
                       className="flex-1"
-                      disabled={!interrupt.canResolve || chat.resuming}
+                      disabled={!interrupt.canResolve || chat.resuming || !preview}
+                      title={preview ? undefined : "Waiting for the canonical preview"}
                       onClick={() => interrupt.resolveInterrupt(true)}
                     >
                       {chat.resuming ? <Loader2Icon className="size-4 animate-spin" /> : <CheckIcon className="size-4" />}
@@ -202,10 +203,16 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                       ))}
                     </ul>
                   ) : (
-                    <p className="mt-2 text-xs text-muted-foreground">Check the values before approving.</p>
+                    <p className="mt-2 text-xs text-muted-foreground">Waiting for the canonical preview — approve unlocks once it arrives.</p>
                   )}
                   <div className="mt-3 flex gap-2">
-                    <Button size="sm" className="flex-1" disabled={!interrupt.canResolve || chat.resuming} onClick={() => interrupt.resolveInterrupt(true)}>
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      disabled={!interrupt.canResolve || chat.resuming || !lines}
+                      title={lines ? undefined : "Waiting for the canonical preview"}
+                      onClick={() => interrupt.resolveInterrupt(true)}
+                    >
                       {chat.resuming ? <Loader2Icon className="size-4 animate-spin" /> : <CheckIcon className="size-4" />}
                       {isDelete ? "Delete" : "Approve"}
                     </Button>

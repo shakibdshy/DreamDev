@@ -18,7 +18,7 @@ import { createLoanBodySchema, createRepaymentBodySchema } from "@/api/loans/sch
 import { updateContributionBodySchema } from "@/api/transactions/schema";
 import { memberPosition } from "@/api/transactions/service";
 
-import { serviceDeps, type AgentContext } from "./context";
+import type { AgentContext } from "./context";
 
 /**
  * The agent's generic gated write surface (ticket 5/8). Four tools cover every
@@ -75,7 +75,6 @@ const SANITY_MAX_FUTURE_DAYS = 35;
  * preview and execute so a hostile proposal never reaches a confirm card.
  */
 function assertSanity(input: WriteInput): void {
-  if (input.action !== "create" && input.action !== "repay") return;
   const { amount, date, creditDate } = input.args as { amount?: unknown; date?: unknown; creditDate?: unknown };
   if (typeof amount === "number") {
     if (!Number.isInteger(amount) || amount <= 0 || amount > SANITY_MAX_AMOUNT) {
@@ -102,7 +101,7 @@ export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", in
   assertRoleAllowed(role, input);
   assertSanity(input);
   const { db, session } = deps;
-  const s = serviceDeps({ db, session, channel: "web" });
+  const s = { db, session };
   const { entity, action, id, args } = input;
 
   const memberName = async (memberId: string) => (await db.member.findUnique({ where: { id: memberId } }))?.name ?? memberId;
@@ -209,7 +208,7 @@ export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", in
 export async function executeWrite(deps: WriteDeps, role: "admin" | "editor", input: WriteInput): Promise<{ recorded: true }> {
   assertRoleAllowed(role, input);
   assertSanity(input);
-  const s = serviceDeps({ db: deps.db, session: deps.session, channel: "web" });
+  const s = { db: deps.db, session: deps.session };
   const { entity, action, id, args } = input;
   switch (`${entity}:${action}`) {
     case "loan:create":
@@ -330,7 +329,7 @@ export async function previewDelete(deps: WriteDeps, role: "admin" | "editor", i
 /** Soft-deletes via the same services the dashboard uses (purge is never exposed). */
 export async function executeDelete(deps: WriteDeps, role: "admin" | "editor", input: DeleteInput): Promise<{ deleted: true }> {
   assertRoleAllowed(role, { entity: input.entity, action: "create", args: {} });
-  const s = serviceDeps({ db: deps.db, session: deps.session, channel: "web" });
+  const s = { db: deps.db, session: deps.session };
   switch (input.entity) {
     case "contribution":
       await softDeleteContribution(s, input.id);
@@ -369,7 +368,7 @@ export function buildWriteTools(role: "admin" | "editor") {
     inputSchema: writeInputSchema(role),
     outputSchema: z.object({ lines: z.array(z.string()) }),
   }).server<AgentContext>(async (input, toolCtx) =>
-    previewWrite(serviceDeps2(toolCtx.context), role, input as WriteInput),
+    previewWrite(asWriteDeps(toolCtx.context), role, input as WriteInput),
   );
 
   const writeRecordTool = toolDefinition({
@@ -379,7 +378,7 @@ export function buildWriteTools(role: "admin" | "editor") {
     outputSchema: z.object({ recorded: z.boolean() }),
     needsApproval: true,
   }).server<AgentContext>(async (input, toolCtx) =>
-    executeWrite(serviceDeps2(toolCtx.context), role, input as WriteInput),
+    executeWrite(asWriteDeps(toolCtx.context), role, input as WriteInput),
   );
 
   const previewDeleteTool = toolDefinition({
@@ -388,7 +387,7 @@ export function buildWriteTools(role: "admin" | "editor") {
     inputSchema: deleteInputSchema(role),
     outputSchema: z.object({ lines: z.array(z.string()) }),
   }).server<AgentContext>(async (input, toolCtx) =>
-    previewDelete(serviceDeps2(toolCtx.context), role, input as DeleteInput),
+    previewDelete(asWriteDeps(toolCtx.context), role, input as DeleteInput),
   );
 
   const deleteRecordTool = toolDefinition({
@@ -398,13 +397,13 @@ export function buildWriteTools(role: "admin" | "editor") {
     outputSchema: z.object({ deleted: z.boolean() }),
     needsApproval: true,
   }).server<AgentContext>(async (input, toolCtx) =>
-    executeDelete(serviceDeps2(toolCtx.context), role, input as DeleteInput),
+    executeDelete(asWriteDeps(toolCtx.context), role, input as DeleteInput),
   );
 
   return [previewWriteTool, writeRecordTool, previewDeleteTool, deleteRecordTool];
 }
 
 /** Adapts a ToolExecutionContext to the WriteDeps shape. */
-function serviceDeps2(ctx: AgentContext): WriteDeps {
+function asWriteDeps(ctx: AgentContext): WriteDeps {
   return { db: ctx.db, session: ctx.session };
 }

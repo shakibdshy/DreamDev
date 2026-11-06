@@ -3,6 +3,7 @@ import type { Database } from "@DreamDev/db";
 import type { AnyTextAdapter } from "@tanstack/ai";
 
 import { bindChat, consumePairingCode } from "./pairing";
+import { HttpError } from "../api/http";
 import type { TelegramClient } from "./client";
 import { handleAgentMessage, handleApprovalCallback } from "./agent-bridge";
 
@@ -28,7 +29,7 @@ export interface TelegramUpdate {
 }
 
 const WELCOME_USER = (name: string, role: string) =>
-  `✅ Linked! ${name}, you're connected as ${role}.\n\nFund assistant chat on Telegram arrives shortly — you'll get a message here when it's live.`;
+  `✅ Linked! ${name}, you're connected as ${role}.\n\nAsk me anything about the fund — every write shows a ✅/✖ confirm first.`;
 
 const PAIRING_INSTRUCTIONS = [
   "👋 This is the DreamDev fund bot.",
@@ -88,8 +89,9 @@ export function createUpdateHandler(deps: { db: Database; client: TelegramClient
       }
       try {
         await bindChat(deps.db, consumed, chatId);
-      } catch {
-        await deps.client.sendMessage(chatId, LINK_TAKEN);
+      } catch (error) {
+        const taken = error instanceof HttpError && error.status === 409;
+        await deps.client.sendMessage(chatId, taken ? LINK_TAKEN : "⚠️ That code points to an account that no longer exists. Ask for a fresh code.");
         return;
       }
       if (consumed.targetType === "member") {

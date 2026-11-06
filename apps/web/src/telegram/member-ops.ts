@@ -2,7 +2,9 @@ import type { Session } from "@DreamDev/auth";
 
 import { optionalEnv } from "@/env-optional";
 
-import { HttpError, requireUser } from "../api/http";
+import { z } from "zod";
+
+import { HttpError, parseOr422, requireUser } from "../api/http";
 import { issuePairingCode, setMemberNotify, unlinkMember } from "./pairing";
 
 /**
@@ -55,9 +57,11 @@ export async function unlinkMemberRoute(deps: OpsDeps, memberId: string) {
   return { linked: false };
 }
 
+const notifyToggleSchema = z.object({ notifyEnabled: z.boolean() });
+
 export async function setMemberNotifyRoute(deps: OpsDeps, memberId: string, body: unknown) {
   const user = requireAdmin(deps.session);
-  const enabled = body === true || body === "true" || (typeof body === "object" && body !== null && "notifyEnabled" in body && (body as { notifyEnabled: unknown }).notifyEnabled === true);
+  const { notifyEnabled: enabled } = parseOr422(notifyToggleSchema, body);
   await setMemberNotify(deps.db, memberId, enabled, user.id);
   return { notifyEnabled: enabled };
 }
