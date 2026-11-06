@@ -73,16 +73,29 @@ async function runTurn(stream: AsyncIterable<unknown>) {
   return { text, pause };
 }
 
-/** The conversation so far, oldest first, as wire messages. */
+/**
+ * The conversation so far, oldest first, as wire messages. Tool rows become
+ * synthetic assistant-toolCall + tool-result pairs so the preview gate can see
+ * which writes were already previewed in earlier turns.
+ */
 async function historyMessages(db: import("@DreamDev/db").Database, userId: string, threadId: string, limit = 20) {
   const conversation = await db.agentConversation.findUnique({ where: { userId_threadId: { userId, threadId } } });
   if (!conversation) return [];
   const rows = await db.agentMessage.findMany({
-    where: { conversationId: conversation.id, role: { not: "tool" } },
+    where: { conversationId: conversation.id },
     orderBy: { createdAt: "asc" },
-    take: limit,
+    take: limit * 2,
   });
-  return rows.map((row) => ({ id: row.id, role: row.role as "user" | "assistant", content: row.content }));
+  const messages: Record<string, unknown>[] = [];
+  for (const row of rows) {
+    if (row.role === "tool") {
+      messages.push({ id: `${row.id}-call`, role: "assistant", content: "", toolCalls: [{ id: row.id, type: "function", function: { name: row.toolName ?? "", arguments: row.toolArgsJson ?? "{}" } }] });
+      messages.push({ id: row.id, role: "tool", toolCallId: row.id, content: row.toolResultJson ?? row.content ?? "" });
+    } else {
+      messages.push({ id: row.id, role: row.role as "user" | "assistant", content: row.content });
+    }
+  }
+  return messages;
 }
 
 export interface AgentBridgeDeps {

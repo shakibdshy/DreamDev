@@ -310,21 +310,28 @@ describe("confirm gate: contribution writes (ticket 4/8)", () => {
   test("approval pauses without writing; approved resume writes with attribution", async () => {
     const { member, bank } = await seedFund();
     const fake = fakeText();
-    fake.setResponses([{ toolCalls: [{ name: "record_contribution", input: proposeInput(member.id, bank.id) }] }]);
+    const input = proposeInput(member.id, bank.id);
 
     const ctx = ctxFor();
     const threadId = `web-${adminSession.user.id}`;
     const conversationId = await ensureConversation(db, ctx, threadId);
     await db.agentMessage.create({ data: { conversationId, role: "user", content: "record 10000 for Rahim" } });
 
-    // Run 1: the proposal pauses on the gate — zero writes.
-    const paused = await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "record 10000 for Rahim" }] }, adapter: fake, threadId, conversationId }));
+    // Run 1: the canonical preview (the gate requires it before any write).
+    fake.setResponses([{ toolCalls: [{ name: "preview_contribution", input }] }, { text: "Here is the preview." }]);
+    const previewed = await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "record 10000 for Rahim" }] }, adapter: fake, threadId, conversationId }));
+    expect(previewed.interruptId).toBeUndefined();
+
+    // Run 2: the proposal pauses on the gate — zero writes. The snapshot
+    // carries the completed preview, so the gate lets record_contribution run.
+    fake.setResponses([{ toolCalls: [{ name: "record_contribution", input }] }]);
+    const paused = await collectGate(agentStream({ ctx, params: { messages: previewed.snapshotMessages as never, runId: "r1" }, adapter: fake, threadId, conversationId }));
     expect(paused.interruptId).toBeDefined();
     expect(paused.interruptedRunId).toBeDefined();
     expect(await db.contribution.count()).toBe(1); // only the seeded one
     expect(await db.contribution.count({ where: { creditDate: new Date("2026-10-20T00:00:00Z") } })).toBe(0);
 
-    // Run 2: approved resume — the service writes exactly as the dashboard would.
+    // Run 3: approved resume — the service writes exactly as the dashboard would.
     fake.appendResponses([{ text: "Recorded ৳10,000 for Rahim Uddin." }]);
     const resumed = await collectGate(agentStream({
       ctx,
@@ -353,12 +360,15 @@ describe("confirm gate: contribution writes (ticket 4/8)", () => {
   test("rejected resume writes nothing", async () => {
     const { member, bank } = await seedFund();
     const fake = fakeText();
-    fake.setResponses([{ toolCalls: [{ name: "record_contribution", input: proposeInput(member.id, bank.id) }] }]);
+    const input = proposeInput(member.id, bank.id);
 
     const ctx = ctxFor();
     const threadId = `web-${adminSession.user.id}`;
     const conversationId = await ensureConversation(db, ctx, threadId);
-    const paused = await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "record it" }] }, adapter: fake, threadId, conversationId }));
+    fake.setResponses([{ toolCalls: [{ name: "preview_contribution", input }] }, { text: "Preview ready." }]);
+    const previewed = await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "record it" }] }, adapter: fake, threadId, conversationId }));
+    fake.setResponses([{ toolCalls: [{ name: "record_contribution", input }] }]);
+    const paused = await collectGate(agentStream({ ctx, params: { messages: previewed.snapshotMessages as never, runId: "r1" }, adapter: fake, threadId, conversationId }));
 
     fake.appendResponses([{ text: "Understood — nothing was recorded." }]);
     const resumed = await collectGate(agentStream({
@@ -387,7 +397,7 @@ describe("confirm gate: contribution writes (ticket 4/8)", () => {
     ];
     for (const [index, input] of caps.entries()) {
       const fake = fakeText();
-      fake.setResponses([{ toolCalls: [{ name: "record_contribution", input }] }, { text: "cannot do that" }]);
+      fake.setResponses([{ toolCalls: [{ name: "preview_contribution", input }] }, { text: "cannot do that" }]);
       const ctx = ctxFor();
       const threadId = `web-${adminSession.user.id}`;
       const conversationId = await ensureConversation(db, ctx, threadId);
@@ -521,11 +531,11 @@ describe("generic write surface (ticket 5/8)", () => {
     const ctx = ctxFor();
     const threadId = `web-${adminSession.user.id}`;
     const conversationId = await ensureConversation(db, ctx, threadId);
-    await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "give Karim a 7000 loan" }] }, adapter: fake, threadId, conversationId }));
+    const previewTurn = await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "give Karim a 7000 loan" }] }, adapter: fake, threadId, conversationId }));
     expect(await db.loan.count()).toBe(0);
 
     fake.setResponses([{ toolCalls: [{ name: "write_record", input }] }]);
-    const paused = await collectGate(agentStream({ ctx, params: { messages: [{ id: "2", role: "user", content: "ok, record it" }] }, adapter: fake, threadId, conversationId }));
+    const paused = await collectGate(agentStream({ ctx, params: { messages: previewTurn.snapshotMessages as never, runId: "g1" }, adapter: fake, threadId, conversationId }));
     expect(paused.interruptId).toBeDefined();
 
     // Reject → nothing
@@ -540,7 +550,7 @@ describe("generic write surface (ticket 5/8)", () => {
     // A fresh proposal, approved → written by the service
     fake.appendResponses([]);
     fake.setResponses([{ toolCalls: [{ name: "write_record", input }] }, { text: "Recorded." }]);
-    const paused2 = await collectGate(agentStream({ ctx, params: { messages: [{ id: "2", role: "user", content: "ok do it" }] }, adapter: fake, threadId, conversationId }));
+    const paused2 = await collectGate(agentStream({ ctx, params: { messages: previewTurn.snapshotMessages as never, runId: "g2" }, adapter: fake, threadId, conversationId }));
     fake.appendResponses([{ text: "Done." }]);
     await collectGate(agentStream({
       ctx,

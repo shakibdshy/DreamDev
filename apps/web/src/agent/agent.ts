@@ -42,6 +42,84 @@ export class RateLimitError extends Error {
   }
 }
 
+/** Stable JSON for comparing tool arguments across preview/write calls. */
+function stableJson(value: unknown): string {
+  if (!value || typeof value !== "object") return JSON.stringify(value ?? null);
+  if (Array.isArray(value)) return JSON.stringify(value.map(stableJson));
+  const sorted = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, stableJson(v)]);
+  return JSON.stringify(sorted);
+}
+
+const PREVIEW_OF: Record<string, string> = {
+  record_contribution: "preview_contribution",
+  write_record: "preview_write",
+  delete_record: "preview_delete",
+};
+
+/** Arg-keys of preview calls that already produced results in the given history. */
+function completedPreviewKeys(messages: ChatParamsLike["messages"]): Set<string> {
+  const calls = new Map<string, { name: string; args: string }>();
+  const answered = new Set<string>();
+  // AG-UI ToolCall nests name/arguments under .function; synthesized history may carry them flat.
+  type WireCall = { id?: string; name?: string; arguments?: string; function?: { name?: string; arguments?: string } };
+  for (const message of messages as { role?: string; toolCalls?: WireCall[]; toolCallId?: string }[]) {
+    if (message.role === "assistant" && Array.isArray(message.toolCalls)) {
+      for (const call of message.toolCalls) {
+        const name = call.function?.name ?? call.name;
+        const args = call.function?.arguments ?? call.arguments;
+        if (call.id && name) calls.set(call.id, { name, args: args ?? "{}" });
+      }
+    }
+    if (message.role === "tool" && typeof message.toolCallId === "string") answered.add(message.toolCallId);
+  }
+  const keys = new Set<string>();
+  for (const [id, call] of calls) {
+    if (!answered.has(id)) continue;
+    if (Object.values(PREVIEW_OF).includes(call.name)) {
+      try {
+        keys.add(`${call.name}:${stableJson(JSON.parse(call.args))}`);
+      } catch {
+        /* unparseable args can't match anyway */
+      }
+    }
+  }
+  return keys;
+}
+
+/**
+ * Confirm-gate precondition (hard rule, not prompt discipline): a gated write
+ * only runs when its EXACT arguments were already previewed in this thread.
+ * Skipped calls return a corrective error to the model, which then previews.
+ */
+function previewGateMiddleware(historyMessages: ChatParamsLike["messages"]): ChatMiddleware<AgentContext> {
+  const seen = completedPreviewKeys(historyMessages);
+  return {
+    name: "preview-gate",
+    onBeforeToolCall: (_ctx, info) => {
+      const previewTool = PREVIEW_OF[info.toolName];
+      if (!previewTool) return;
+      let args: unknown = info.args;
+      const key = `${previewTool}:${stableJson(args)}`;
+      if (seen.has(key)) return;
+      return {
+        type: "skip",
+        result: { error: `Call ${previewTool} with these exact arguments first and show the user its result — the confirm card requires the canonical preview.` },
+      } as const;
+    },
+    onAfterToolCall: (_ctx, info) => {
+      // Previews that complete in THIS run unlock the matching write.
+      const previewTool = Object.values(PREVIEW_OF).find((name) => name === info.toolName);
+      if (previewTool && info.ok) {
+        try {
+          seen.add(`${previewTool}:${stableJson(JSON.parse(info.toolCall.function?.arguments ?? "{}"))}`);
+        } catch {
+          /* ignore */
+        }
+      }
+    },
+  };
+}
+
 const messageText = (message: { role: string; content?: unknown; parts?: unknown }): string => {
   if (typeof message.content === "string") return message.content;
   // UIMessage: parts carry the text ({type:'text', content}); ModelMessage content may be part arrays with text
@@ -116,7 +194,11 @@ export function agentStream(args: {
     tools: agentTools(ctx.session.user.role === "admin" ? "admin" : "editor"),
     context: ctx,
     agentLoopStrategy: maxIterations(8),
-    middleware: [auditMiddleware(conversationId, ctx.db)],
+    // The gate guards FRESH proposals; a resume replays an already-approved,
+    // args-frozen call — enforcement happened before the pause.
+    middleware: params.resume
+      ? [auditMiddleware(conversationId, ctx.db)]
+      : [previewGateMiddleware(params.messages), auditMiddleware(conversationId, ctx.db)],
   });
 }
 

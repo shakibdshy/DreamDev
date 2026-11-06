@@ -76,7 +76,7 @@ export function AgentPanel({ user }: { user: ShellUser }) {
             <BotIcon className="size-4 text-primary" />
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">Fund assistant</p>
-              <p className="text-xs text-muted-foreground">Read-only — looks up members, dues, banks</p>
+              <p className="text-xs text-muted-foreground">Chat + record with confirmation</p>
             </div>
             <Button variant="ghost" size="icon" className="ml-auto size-7" aria-label="Close assistant" onClick={() => setOpen(false)}>
               <XIcon className="size-4" />
@@ -105,7 +105,7 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                 >
                   {message.parts.map((part, index) => {
                     if (part.type === "text" && part.content) {
-                      return <p key={index} className="whitespace-pre-wrap">{part.content}</p>;
+                      return <div key={index} className="space-y-1">{renderMarkdownish(part.content)}</div>;
                     }
                     if (part.type === "tool-call") {
                       return (
@@ -255,15 +255,26 @@ export function AgentPanel({ user }: { user: ShellUser }) {
  * so a direct match wins; otherwise the newest preview in the thread.
  */
 function findLatestPreview(messages: readonly UIMessage<never>[], interruptId: string): ContributionPreview | null {
+  // tool-result parts may omit `name` — resolve ids through the tool-call parts.
+  const nameOf = new Map<string, string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool-call") {
+        const call = part as { type: "tool-call"; id?: string; name?: string };
+        if (call.id && call.name) nameOf.set(call.id, call.name);
+      }
+    }
+  }
   let fallback: ContributionPreview | null = null;
   for (const message of messages) {
     for (const part of message.parts) {
       if (part.type !== "tool-result") continue;
       const resultPart = part as { type: "tool-result"; toolCallId?: string; name?: string; content?: unknown };
-      if (resultPart.name !== previewContributionDef.name) continue;
+      const name = resultPart.name ?? (resultPart.toolCallId ? nameOf.get(resultPart.toolCallId) : undefined);
+      if (name !== previewContributionDef.name) continue;
       const parsed = parsePreview(resultPart.content);
       if (!parsed) continue;
-      if (resultPart.toolCallId === interruptId) return parsed;
+      if (resultPart.toolCallId && interruptId.endsWith(resultPart.toolCallId)) return parsed;
       fallback = parsed;
     }
   }
@@ -308,6 +319,16 @@ function findPreviewLines(messages: UIMessage<never>[], interrupt: { toolName: s
       }
     }
   }
+  // tool-result parts may omit `name` — resolve ids through the tool-call parts.
+  const nameOf = new Map<string, string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool-call") {
+        const call = part as { type: "tool-call"; id?: string; name?: string };
+        if (call.id && call.name) nameOf.set(call.id, call.name);
+      }
+    }
+  }
   const matches = (callArgs: string | undefined) => {
     if (!callArgs || typeof interrupt.originalArgs !== "object" || interrupt.originalArgs === null) return true; // fallback: latest
     try {
@@ -320,7 +341,8 @@ function findPreviewLines(messages: UIMessage<never>[], interrupt: { toolName: s
     for (const part of message.parts) {
       if (part.type !== "tool-result") continue;
       const result = part as { type: "tool-result"; toolCallId?: string; name?: string; content?: unknown };
-      if (result.name !== previewTool || !result.toolCallId) continue;
+      const name = result.name ?? (result.toolCallId ? nameOf.get(result.toolCallId) : undefined);
+      if (name !== previewTool || !result.toolCallId) continue;
       const parsed = parseLines(result.content);
       if (!parsed) continue;
       if (matches(argsOf.get(result.toolCallId))) return parsed;
@@ -342,4 +364,27 @@ function stableJson(value: unknown): string {
   if (!value || typeof value !== "object") return JSON.stringify(value ?? null);
   const sorted = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, stableJson(v)]);
   return JSON.stringify(sorted);
+}
+
+/**
+ * Minimal assistant-answer rendering: **bold** spans, "- " bullets, blank-line
+ * paragraphs. Deliberately tiny — model output is plain prose, not full MD.
+ */
+function renderMarkdownish(text: string) {
+  const blocks = text.split(/\n\n+/);
+  return blocks.map((block, blockIndex) => {
+    const lines = block.split("\n");
+    const bulletLines = lines.filter((line) => /^[-*•]\s+/.test(line.trim()));
+    if (bulletLines.length >= 2 || (bulletLines.length >= 1 && lines.length === bulletLines.length)) {
+      const items = lines.filter((line) => line.trim()).map((line, i) => <li key={i}>{inlineBold(line.trim().replace(/^[-*•]\s+/, ""))}</li>);
+      return <ul key={blockIndex} className="list-disc pl-4 space-y-0.5">{items}</ul>;
+    }
+    return <p key={blockIndex} className="whitespace-pre-wrap">{lines.map((line, i) => <span key={i}>{inlineBold(line)}{i < lines.length - 1 ? "\n" : null}</span>)}</p>;
+  });
+}
+
+function inlineBold(text: string) {
+  const parts = text.split(/\*\*([^*]+)\*\*/g);
+  if (parts.length === 1) return text;
+  return parts.map((part, index) => (index % 2 === 1 ? <strong key={index}>{part}</strong> : <span key={index}>{part}</span>));
 }
