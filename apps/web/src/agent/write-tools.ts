@@ -66,6 +66,32 @@ function assertRoleAllowed(role: "admin" | "editor", input: WriteInput): void {
   if (ADMIN_ACTIONS.includes(input.action)) throw new Error("Share changes are Admin-only");
 }
 
+const SANITY_MAX_AMOUNT = 10_000_000; // ৳1 crore — the spec's tool-layer cap
+const SANITY_MAX_FUTURE_DAYS = 35;
+
+/**
+ * Tool-layer sanity caps on top of the service zod (spec guardrail 6): money
+ * creates are bounded and Credit Dates can't be wild guesses. Applied in both
+ * preview and execute so a hostile proposal never reaches a confirm card.
+ */
+function assertSanity(input: WriteInput): void {
+  if (input.action !== "create" && input.action !== "repay") return;
+  const { amount, date, creditDate } = input.args as { amount?: unknown; date?: unknown; creditDate?: unknown };
+  if (typeof amount === "number") {
+    if (!Number.isInteger(amount) || amount <= 0 || amount > SANITY_MAX_AMOUNT) {
+      throw new Error(`Amount must be whole taka between ৳1 and ৳${SANITY_MAX_AMOUNT.toLocaleString("en-IN")}`);
+    }
+  }
+  const rawDate = typeof creditDate === "string" ? creditDate : typeof date === "string" ? date : undefined;
+  if (typeof rawDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
+    const today = new Date();
+    const limit = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + SANITY_MAX_FUTURE_DAYS));
+    if (new Date(`${rawDate}T00:00:00Z`).getTime() > limit.getTime()) {
+      throw new Error(`Dates can be at most ${SANITY_MAX_FUTURE_DAYS} days in the future`);
+    }
+  }
+}
+
 interface WriteDeps {
   db: Database;
   session: AgentContext["session"];
@@ -74,6 +100,7 @@ interface WriteDeps {
 /** Canonical human-readable preview lines, assembled from DB reads only. */
 export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", input: WriteInput): Promise<{ lines: string[] }> {
   assertRoleAllowed(role, input);
+  assertSanity(input);
   const { db, session } = deps;
   const s = serviceDeps({ db, session, channel: "web" });
   const { entity, action, id, args } = input;
@@ -181,6 +208,7 @@ export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", in
 /** Dispatches an approved write into the real service. */
 export async function executeWrite(deps: WriteDeps, role: "admin" | "editor", input: WriteInput): Promise<{ recorded: true }> {
   assertRoleAllowed(role, input);
+  assertSanity(input);
   const s = serviceDeps({ db: deps.db, session: deps.session, channel: "web" });
   const { entity, action, id, args } = input;
   switch (`${entity}:${action}`) {
