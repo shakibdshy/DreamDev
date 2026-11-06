@@ -175,7 +175,8 @@ describe("update handling", () => {
 
     await bindChat(db, { targetType: "user", targetId: adminSession.user.id }, "777");
     await handle(startUpdate(2, "777", "what is the fund total?"));
-    expect(sent[1]?.text).toContain("coming soon");
+    // No adapter in this handler → the bridge answers with the not-configured notice
+    expect(sent[1]?.text).toContain("isn't configured");
   });
 });
 
@@ -365,5 +366,163 @@ describe("member pairing (ticket 2/8)", () => {
     const issued = await issuePairingCode(db, { targetType: "member", targetId: member.id });
     const consumed = await consumePairingCode(db, issued.code);
     expect(await bindChat(db, consumed!, "400").catch(() => "rejected")).toBe("rejected");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ticket 6/8: Telegram agent chat for Admin/Editor
+// ---------------------------------------------------------------------------
+
+import { fakeText } from "@tanstack/ai/testing";
+import { handleAgentMessage, handleApprovalCallback } from "./agent-bridge";
+
+
+/** Local seed: one member + one bank (agent.test.ts has its own richer one). */
+async function seedFundTg() {
+  const member = await db.member.create({ data: { name: "Rahim Tg", mobile: "01512345678", joiningDate: new Date("2026-01-01") } });
+  await db.shareAllotment.create({ data: { memberId: member.id, quantity: 2, effectiveMonth: "2026-01" } });
+  const bank = await db.bankAccount.create({ data: { bankName: "Dutch-Bangla Tg", openingBalance: 100_000 } });
+  return { member, bank };
+}
+
+describe("telegram agent chat (ticket 6/8)", () => {
+  test("linked user question flows through the agent loop with tools", async () => {
+    await seedFundTg();
+    const recorded: { chatId: string; text: string; markup?: unknown }[] = [];
+    const client: TelegramClient = {
+      async sendMessage(chatId, text, options) {
+        recorded.push({ chatId, text, markup: options?.replyMarkup });
+        return { ok: true, messageId: 1 };
+      },
+      async answerCallbackQuery() {
+        return { ok: true };
+      },
+      async getMe() {
+        return { ok: true, result: { username: "dreamdev_fund_bot" } };
+      },
+    };
+    const fake = fakeText();
+    fake.setResponses([
+      { toolCalls: [{ name: "fund_overview", input: {} }] },
+      { text: "The fund holds ৳1,00,000 across its bank accounts." },
+    ]);
+
+    await bindChat(db, { targetType: "user", targetId: adminSession.user.id }, "777");
+    await handleAgentMessage({ db, client, adapter: fake }, "777", "how much money does the fund have?", {
+      id: adminSession.user.id,
+      role: "admin",
+      status: "active",
+    });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.text).toContain("৳1,00,000");
+    // Audit: user + tool + assistant rows on the telegram thread
+    const conversation = await db.agentConversation.findFirstOrThrow({ where: { channel: "telegram" } });
+    const rows = await db.agentMessage.findMany({ where: { conversationId: conversation.id } });
+    expect(rows.some((r) => r.role === "tool" && r.toolName === "fund_overview")).toBe(true);
+    expect(rows.some((r) => r.role === "user" && r.content.includes("how much"))).toBe(true);
+  });
+
+  test("gated write pauses with a keyboard; approve executes; cancel never writes", async () => {
+    const { bank } = await seedFundTg();
+    const sent: { text: string; markup?: unknown }[] = [];
+    let answered = "";
+    const client: TelegramClient = {
+      async sendMessage(_chatId, text, options) {
+        sent.push({ text, markup: options?.replyMarkup });
+        return { ok: true, messageId: 2 };
+      },
+      async answerCallbackQuery(_id, text) {
+        answered = text ?? "";
+        return { ok: true };
+      },
+      async getMe() {
+        return { ok: true, result: { username: "dreamdev_fund_bot" } };
+      },
+    };
+    const user = { id: adminSession.user.id, role: "admin" as const, status: "active" };
+    const proposal = { entity: "expense", action: "create", args: { bankAccountId: bank.id, amount: 300, date: "2026-11-03", note: "Tea" } };
+    const fake = fakeText();
+    fake.setResponses([{ toolCalls: [{ name: "preview_write", input: proposal }] }, { text: "Here is the preview." }]);
+
+    await bindChat(db, { targetType: "user", targetId: user.id }, "888");
+    await handleAgentMessage({ db, client, adapter: fake }, "888", "add a 300 expense for tea", user);
+    expect(await db.expense.count()).toBe(0); // preview only
+    expect(await db.agentPausedApproval.count()).toBe(0); // preview doesn't pause
+
+    // Propose → pause + keyboard
+    fake.setResponses([{ toolCalls: [{ name: "write_record", input: proposal }] }]);
+    await handleAgentMessage({ db, client, adapter: fake }, "888", "ok record it", user);
+    expect(await db.expense.count()).toBe(0); // paused, not executed
+    const pause = await db.agentPausedApproval.findUnique({ where: { chatId: "888" } });
+    expect(pause?.toolName).toBe("write_record");
+    expect(sent.at(-1)?.markup).toBeTruthy(); // inline keyboard present
+
+    // Pending pause blocks further messages
+    await handleAgentMessage({ db, client, adapter: fake }, "888", "actually also do X", user);
+    expect(sent.at(-1)?.text).toContain("pending confirmation");
+
+    // ✖ Cancel → nothing written, pause cleared
+    await handleApprovalCallback({ db, client, adapter: fake }, "888", "cb1", false);
+    expect(await db.expense.count()).toBe(0);
+    expect(await db.agentPausedApproval.count()).toBe(0);
+    expect(answered).toBe("Cancelled.");
+
+    // ✅ Approve on a fresh proposal → written by the service with attribution
+    fake.setResponses([{ toolCalls: [{ name: "write_record", input: proposal }] }]);
+    await handleAgentMessage({ db, client, adapter: fake }, "888", "record it for real", user);
+    await handleApprovalCallback({ db, client, adapter: fake }, "888", "cb2", true);
+    const expense = await db.expense.findFirstOrThrow();
+    expect(expense.amount).toBe(300);
+    expect(expense.createdBy).toBe(user.id);
+    expect(await db.agentPausedApproval.count()).toBe(0);
+  });
+
+  test("expired pauses refuse to resume and clear", async () => {
+    const sent: string[] = [];
+    const client: TelegramClient = {
+      async sendMessage(_chatId, text) {
+        sent.push(text);
+        return { ok: true, messageId: 3 };
+      },
+      async answerCallbackQuery(_id, text) {
+        sent.push(`cb:${text ?? ""}`);
+        return { ok: true };
+      },
+      async getMe() {
+        return { ok: true, result: { username: "dreamdev_fund_bot" } };
+      },
+    };
+    await db.agentPausedApproval.create({
+      data: {
+        chatId: "900",
+        userId: adminSession.user.id,
+        threadId: `telegram-${adminSession.user.id}`,
+        interruptId: "approval_x",
+        interruptedRunId: "run-x",
+        toolName: "write_record",
+        argsJson: "{}",
+        messagesJson: "[]",
+        expiresAt: new Date(Date.now() - 1000),
+      },
+    });
+    await handleApprovalCallback({ db, client, adapter: fakeText() }, "900", "cb9", true);
+    expect(await db.agentPausedApproval.count()).toBe(0);
+    expect(sent.some((t) => t.includes("expired"))).toBe(true);
+    expect(sent.some((t) => t.startsWith("cb:Expired"))).toBe(true);
+  });
+
+  test("webhook routes callback_query into the approval handler and member texts stay notification-only", async () => {
+    const { client, sent } = fakeClient();
+    const handle = createUpdateHandler({ db, client, adapter: fakeText() });
+    const member = await db.member.create({ data: { name: "Sufia", mobile: "01612345678", joiningDate: new Date("2026-03-01") } });
+    const code = await issuePairingCode(db, { targetType: "member", targetId: member.id });
+    await handle(startUpdate(1, "950", `/start ${code.code}`));
+    await handle(startUpdate(2, "950", "any message"));
+    expect(String(sent.at(-1)?.text ?? "").startsWith("This bot is notification-only")).toBe(true);
+    // A callback with no pending pause answers harmlessly
+    await handle({ update_id: 3, callback_query: { id: "cbx", from: { id: "777" }, data: "approval:approve" } });
+    // Welcome + the reply to their message both carry the notice
+    expect(sent.filter((t) => String(t.text).includes("notification-only")).length).toBe(2);
   });
 });

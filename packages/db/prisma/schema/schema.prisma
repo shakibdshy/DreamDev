@@ -278,3 +278,22 @@ model TelegramPairingCode {
   @@index([targetType, targetId])
   @@map("telegram_pairing_code")
 }
+
+// Server-held approval pauses for Telegram agent turns (#14): the webhook is
+// stateless, so a paused confirm (inline keyboard) survives in the DB until
+// the callback resumes it or the 10-minute expiry lapses. One per chat.
+model AgentPausedApproval {
+  id               String   @id @default(uuid())
+  chatId           String   @unique
+  userId           String
+  threadId         String
+  interruptId      String
+  interruptedRunId String
+  toolName         String
+  argsJson         String
+  messagesJson     String // exact AG-UI snapshot the resume rebuilds from
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  @@map("agent_paused_approval")
+}

@@ -1,7 +1,10 @@
 import type { Database } from "@DreamDev/db";
 
+import type { AnyTextAdapter } from "@tanstack/ai";
+
 import { bindChat, consumePairingCode } from "./pairing";
 import type { TelegramClient } from "./client";
+import { handleAgentMessage, handleApprovalCallback } from "./agent-bridge";
 
 /**
  * Handles one Telegram update (ticket 1/8): pairing via /start <code>,
@@ -55,13 +58,20 @@ export class UpdateDeduper {
   }
 }
 
-export function createUpdateHandler(deps: { db: Database; client: TelegramClient; deduper?: UpdateDeduper }) {
+export function createUpdateHandler(deps: { db: Database; client: TelegramClient; adapter?: AnyTextAdapter; deduper?: UpdateDeduper }) {
   const deduper = deps.deduper ?? new UpdateDeduper();
   return async function handleUpdate(update: TelegramUpdate): Promise<void> {
     if (!deduper.firstTime(update.update_id)) return;
 
+    // Approve/Cancel buttons resume a paused confirm (ticket 6/8)
+    if (update.callback_query) {
+      const approved = update.callback_query.data === "approval:approve";
+      await handleApprovalCallback(deps, String(update.callback_query.from.id), update.callback_query.id, approved);
+      return;
+    }
+
     const message = update.message;
-    if (!message) return; // callback_query handling arrives with ticket 6/8
+    if (!message) return;
     const chatId = String(message.chat.id);
     const text = (message.text ?? "").trim();
 
@@ -92,7 +102,7 @@ export function createUpdateHandler(deps: { db: Database; client: TelegramClient
     }
 
     // Any other message: members are notification-only, linked users get the
-    // agent placeholder, unknown chats pairing instructions.
+    // agent loop, unknown chats pairing instructions.
     const member = await deps.db.member.findFirst({ where: { telegramChatId: chatId } });
     if (member) {
       await deps.client.sendMessage(chatId, NOTIFICATION_ONLY);
@@ -100,7 +110,7 @@ export function createUpdateHandler(deps: { db: Database; client: TelegramClient
     }
     const linked = await deps.db.user.findFirst({ where: { telegramChatId: chatId } });
     if (linked) {
-      await deps.client.sendMessage(chatId, "The fund assistant on Telegram is coming soon — meanwhile the dashboard chat is live on every page.");
+      await handleAgentMessage(deps, chatId, text, linked);
       return;
     }
     await deps.client.sendMessage(chatId, PAIRING_INSTRUCTIONS);

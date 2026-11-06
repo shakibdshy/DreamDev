@@ -4,6 +4,8 @@ import { optionalEnv } from "@/env-optional";
 
 import { createTelegramClient, type TelegramClient } from "./client";
 import { issuePairingCode, unlinkUser } from "./pairing";
+import { envAgentAdapter } from "@/agent/http";
+import type { AnyTextAdapter } from "@tanstack/ai";
 import { createUpdateHandler, UpdateDeduper, type TelegramUpdate } from "./updates";
 import { errorResponse, HttpError, requireUser } from "../api/http";
 import { appContext, ok, withApi, type ApiResolver } from "../api/route-helpers";
@@ -31,6 +33,8 @@ export function verifyWebhookSecret(header: string | null, expected: string | un
 
 export interface TelegramApiOptions {
   client?: TelegramClient;
+  /** Lazy adapter for the agent transport (tests inject fakeText). */
+  getAdapter?: () => AnyTextAdapter | undefined;
 }
 
 export function telegramApi(resolve: ApiResolver, options: TelegramApiOptions = {}) {
@@ -44,7 +48,12 @@ export function telegramApi(resolve: ApiResolver, options: TelegramApiOptions = 
       const update = (await request.json().catch(() => null)) as TelegramUpdate | null;
       if (!update || typeof update.update_id !== "number") return ok({ received: false }); // nothing actionable
       const { db } = await resolve(request);
-      const handle = createUpdateHandler({ db, client: options.client ?? clientFromEnv()!, deduper });
+      const handle = createUpdateHandler({
+        db,
+        client: options.client ?? clientFromEnv()!,
+        adapter: options.getAdapter?.() ?? envAgentAdapter(),
+        deduper,
+      });
       try {
         await handle(update);
       } catch (error) {

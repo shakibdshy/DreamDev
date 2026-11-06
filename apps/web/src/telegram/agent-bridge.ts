@@ -1,0 +1,194 @@
+import { chatParamsFromRequest } from "@tanstack/ai";
+
+import type { Session } from "@DreamDev/auth";
+
+import type { AnyTextAdapter } from "@tanstack/ai";
+
+import { agentStream, ensureConversation, RateLimitError, createRateLimiter } from "@/agent/agent";
+import type { TelegramClient } from "./client";
+import { HttpError } from "../api/http";
+
+/**
+ * The Telegram transport for the fund agent (ticket 6/8): linked users chat
+ * with the same loop, tools, prompt, role scoping, rate limit, and audit as
+ * the web panel. Confirm cards become inline keyboards; the callback resumes
+ * the interrupt from the server-held pause (AgentPausedApproval, 10-min TTL).
+ * Members never reach here — updates.ts answers them notification-only.
+ */
+
+const tgLimiter = createRateLimiter(60);
+const APPROVAL_TTL_MINUTES = 10;
+
+const APPROVE_LABEL = "✅ Approve";
+const CANCEL_LABEL = "✖ Cancel";
+const approvalKeyboard = {
+  inline_keyboard: [
+    [
+      { text: APPROVE_LABEL, callback_data: "approval:approve" },
+      { text: CANCEL_LABEL, callback_data: "approval:cancel" },
+    ],
+  ],
+};
+
+/** A minimal Session shaped from the linked user row (services read id/role/status). */
+function sessionFromUser(user: { id: string; role: string; status: string }): Session {
+  return {
+    user: { id: user.id, role: user.role, status: user.status },
+    session: { id: `tg-${user.id}`, userId: user.id, expiresAt: new Date(Date.now() + 3_600_000) },
+  } as unknown as Session;
+}
+
+/** Consumes an agent chunk stream, returning the reply text and pause info. */
+async function runTurn(stream: AsyncIterable<unknown>) {
+  let text = "";
+  let pause: { interruptId: string; interruptedRunId: string; toolName: string; argsJson: string; messages: unknown } | undefined;
+  let snapshot: unknown[] = [];
+  for await (const raw of stream) {
+    const chunk = raw as {
+      type: string;
+      delta?: unknown;
+      outcome?: {
+        type: string;
+        interrupts?: {
+          id: string;
+          metadata?: Record<string, { interruptedRunId: string; interruptId: string; toolName: string; originalArgs: unknown } | undefined>;
+        }[];
+      };
+    };
+    if (chunk.type === "TEXT_MESSAGE_CONTENT") text += String(chunk.delta ?? "");
+    if (chunk.type === "MESSAGES_SNAPSHOT") snapshot = (raw as { messages: unknown[] }).messages;
+    if (chunk.type === "RUN_FINISHED" && chunk.outcome?.type === "interrupt") {
+      const first = chunk.outcome.interrupts?.[0];
+      const binding = first?.metadata?.["tanstack:interruptBinding"];
+      if (binding) {
+        pause = {
+          interruptId: binding.interruptId,
+          interruptedRunId: binding.interruptedRunId,
+          toolName: binding.toolName,
+          argsJson: JSON.stringify(binding.originalArgs ?? {}),
+          messages: snapshot,
+        };
+      }
+    }
+  }
+  return { text, pause };
+}
+
+/** The conversation so far, oldest first, as wire messages. */
+async function historyMessages(db: import("@DreamDev/db").Database, userId: string, threadId: string, limit = 20) {
+  const conversation = await db.agentConversation.findUnique({ where: { userId_threadId: { userId, threadId } } });
+  if (!conversation) return [];
+  const rows = await db.agentMessage.findMany({
+    where: { conversationId: conversation.id, role: { not: "tool" } },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+  return rows.map((row) => ({ id: row.id, role: row.role as "user" | "assistant", content: row.content }));
+}
+
+export interface AgentBridgeDeps {
+  db: import("@DreamDev/db").Database;
+  client: TelegramClient;
+  adapter?: AnyTextAdapter;
+}
+
+/** One Telegram agent turn for a linked user. Sends the reply (and keyboard). */
+export async function handleAgentMessage(deps: AgentBridgeDeps, chatId: string, text: string, user: { id: string; role: string; status: string }): Promise<void> {
+  const { db, client } = deps;
+  if (!deps.adapter) {
+    await client.sendMessage(chatId, "The fund assistant isn't configured on this deployment yet.");
+    return;
+  }
+
+  const pending = await db.agentPausedApproval.findUnique({ where: { chatId } });
+  if (pending) {
+    await client.sendMessage(chatId, "There's a pending confirmation above — use ✅ Approve or ✖ Cancel first.");
+    return;
+  }
+
+  try {
+    tgLimiter.check(user.id);
+  } catch (error) {
+    await client.sendMessage(chatId, error instanceof RateLimitError ? error.message : "Rate limit reached.");
+    return;
+  }
+
+  const session = sessionFromUser(user);
+  const ctx = { db, session, channel: "telegram" as const };
+  const threadId = `telegram-${user.id}`;
+  const conversationId = await ensureConversation(db, ctx, threadId);
+  const history = await historyMessages(db, user.id, threadId);
+  const messages = [...history, { id: `tg-${Date.now()}`, role: "user" as const, content: text }];
+  await db.agentMessage.create({ data: { conversationId, role: "user", content: text } });
+
+  const { text: reply, pause } = await runTurn(agentStream({ ctx, params: { messages: messages as never }, adapter: deps.adapter, threadId, conversationId }));
+
+  if (pause && pause.messages) {
+    await db.agentPausedApproval.create({
+      data: {
+        chatId,
+        userId: user.id,
+        threadId,
+        interruptId: pause.interruptId,
+        interruptedRunId: pause.interruptedRunId,
+        toolName: pause.toolName,
+        argsJson: pause.argsJson,
+        messagesJson: JSON.stringify(pause.messages),
+        expiresAt: new Date(Date.now() + APPROVAL_TTL_MINUTES * 60_000),
+      },
+    });
+    const label = pause.toolName === "delete_record" ? "Delete this record?" : pause.toolName === "record_contribution" ? "Record this contribution?" : "Apply this change?";
+    await client.sendMessage(chatId, `${label}\n\n${reply || "The confirm card is waiting for your answer."}`.trim(), { replyMarkup: approvalKeyboard });
+    return;
+  }
+
+  await client.sendMessage(chatId, reply || "I couldn't complete that — please try again.");
+}
+
+/** ✅/✖ callback: resumes the paused run or reports expiry. */
+export async function handleApprovalCallback(deps: AgentBridgeDeps, chatId: string, callbackQueryId: string, approved: boolean): Promise<void> {
+  const { db, client } = deps;
+  const pending = await db.agentPausedApproval.findUnique({ where: { chatId } });
+  if (!pending) {
+    await client.answerCallbackQuery(callbackQueryId, "No pending confirmation.");
+    return;
+  }
+  if (pending.expiresAt.getTime() < Date.now()) {
+    await db.agentPausedApproval.delete({ where: { id: pending.id } });
+    await client.answerCallbackQuery(callbackQueryId, "Expired.");
+    await client.sendMessage(chatId, "That confirmation expired — please ask again.");
+    return;
+  }
+
+  const user = await db.user.findUnique({ where: { id: pending.userId } });
+  if (!user) {
+    await db.agentPausedApproval.delete({ where: { id: pending.id } });
+    await client.answerCallbackQuery(callbackQueryId, "Account not found.");
+    return;
+  }
+
+  const session = sessionFromUser(user);
+  const ctx = { db, session, channel: "telegram" as const };
+  const snapshot = JSON.parse(pending.messagesJson);
+  const { text: reply } = await runTurn(
+    agentStream({
+      ctx,
+      params: {
+        messages: snapshot as never,
+        runId: `tg-resume-${Date.now()}`,
+        parentRunId: pending.interruptedRunId,
+        resume: [{ interruptId: pending.interruptId, status: "resolved", payload: { approved } }] as never,
+      },
+      adapter: deps.adapter!,
+      threadId: pending.threadId,
+      conversationId: (await ensureConversation(db, ctx, pending.threadId)),
+    }),
+  );
+
+  await db.agentPausedApproval.delete({ where: { id: pending.id } });
+  await client.answerCallbackQuery(callbackQueryId, approved ? "Approved." : "Cancelled.");
+  await client.sendMessage(chatId, reply || (approved ? "Done." : "Cancelled — nothing was recorded."));
+}
+
+/** Re-exported for webhook wiring. */
+export { HttpError, chatParamsFromRequest };
