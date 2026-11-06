@@ -18,14 +18,23 @@ export interface LoanView {
   repaid: number;
   outstanding: number;
   settled: boolean;
-  repayments: { id: string; amount: number; creditDate: string }[];
+  bankName: string;
+  repayments: { id: string; amount: number; creditDate: string; bankName: string }[];
 }
 
 /** Loans are interest-free (GLOSSARY.md); outstanding = principal − live repayments. */
 async function loanViews(db: Database, memberId: string): Promise<{ loans: LoanView[]; totalOutstanding: number }> {
   const [loans, repayments] = await Promise.all([
-    db.loan.findMany({ where: { memberId, deletedAt: null }, orderBy: { date: "asc" } }),
-    db.loanRepayment.findMany({ where: { memberId, deletedAt: null }, orderBy: { creditDate: "asc" } }),
+    db.loan.findMany({
+      where: { memberId, deletedAt: null },
+      orderBy: [{ date: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      include: { bankAccount: { select: { bankName: true } } },
+    }),
+    db.loanRepayment.findMany({
+      where: { memberId, deletedAt: null },
+      orderBy: [{ creditDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      include: { bankAccount: { select: { bankName: true } } },
+    }),
   ]);
 
   const views = loans.map((loan) => {
@@ -40,7 +49,8 @@ async function loanViews(db: Database, memberId: string): Promise<{ loans: LoanV
       repaid,
       outstanding,
       settled: outstanding === 0,
-      repayments: own.map((r) => ({ id: r.id, amount: r.amount, creditDate: r.creditDate.toISOString().slice(0, 10) })),
+      bankName: loan.bankAccount.bankName,
+      repayments: own.map((r) => ({ id: r.id, amount: r.amount, creditDate: r.creditDate.toISOString().slice(0, 10), bankName: r.bankAccount.bankName })),
     };
   });
   return { loans: views, totalOutstanding: views.reduce((sum, l) => sum + l.outstanding, 0) };

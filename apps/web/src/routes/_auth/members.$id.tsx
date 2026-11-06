@@ -4,10 +4,11 @@ import {
   ArrowLeftIcon,
   CameraIcon,
   CalendarDaysIcon,
+  CheckCircle2Icon,
+  ChevronDownIcon,
   HandCoinsIcon,
   LayersIcon,
   MapPinIcon,
-  MoreHorizontalIcon,
   PhoneIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -18,20 +19,24 @@ import { toast } from "sonner";
 
 import { formatTaka } from "@DreamDev/db/domain/money";
 import { addMonths, todayInDhaka } from "@DreamDev/db/domain/month";
+import { displayMonthStatus, type MonthCell } from "@DreamDev/db/domain/projection";
 import { Avatar, AvatarFallback, AvatarImage } from "@DreamDev/ui/components/avatar";
 import { Badge } from "@DreamDev/ui/components/badge";
 import { Button } from "@DreamDev/ui/components/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@DreamDev/ui/components/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@DreamDev/ui/components/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@DreamDev/ui/components/dropdown-menu";
 import { Input } from "@DreamDev/ui/components/input";
 import { Skeleton } from "@DreamDev/ui/components/skeleton";
 import { cn } from "@DreamDev/ui/lib/utils";
 import { Progress } from "@DreamDev/ui/components/progress";
 
+import type { LoanView } from "@/api/loans/service";
 import { Amount } from "@/components/amount";
+import { LoanRepaymentForm } from "@/components/loan-repayment-form";
 import { BankSelect, useBankBalance } from "@/components/bank-select";
 import { EmptyState } from "@/components/empty-state";
+import { DatePicker } from "@/components/date-picker";
+import { MemberActions } from "@/components/member-actions";
 import { Field } from "@/components/field";
 import { StatusBadge } from "@/components/status-badge";
 import { api } from "@/lib/api";
@@ -54,18 +59,7 @@ interface MemberDetail {
   summary: { billed: number; contributed: number; adjusted: number; due: number; advance: number };
   advanceCoverage: { months: number; monthlyBill: number; lastCoveredMonth: string } | null;
   timelineYear: number;
-  timeline: { month: string; bill: number; applied: number; status: string }[];
-}
-
-interface LoanRowView {
-  id: string;
-  amount: number;
-  date: string;
-  note: string | null;
-  repaid: number;
-  outstanding: number;
-  settled: boolean;
-  repayments: { id: string; amount: number; creditDate: string }[];
+  timeline: MonthCell[];
 }
 
 const MEMBERS_SEARCH = { page: 1, pageSize: 10, sort: "createdAt", order: "desc" } as const;
@@ -86,8 +80,6 @@ function MemberDetailPage() {
   const isAdmin = session?.user.role === "admin";
 
   const [sharesOpen, setSharesOpen] = useState(false);
-  const [statusOpen, setStatusOpen] = useState(false);
-  const [removeOpen, setRemoveOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const photoInput = useRef<HTMLInputElement>(null);
 
@@ -229,30 +221,7 @@ function MemberDetailPage() {
               Change shares
             </Button>
           )}
-          <DropdownMenu>
-            <DropdownMenuTrigger render={<Button variant="outline" className="gap-2" />}>
-              <MoreHorizontalIcon className="size-4" />
-              Member actions
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Membership</DropdownMenuLabel>
-              {member.status === "active" && (
-                <DropdownMenuItem onClick={() => act.mutate({ path: `/api/members/${id}/status`, body: { status: "inactive", date: todayInDhaka() } })}>
-                  Mark inactive
-                </DropdownMenuItem>
-              )}
-              {member.status === "inactive" && (
-                <DropdownMenuItem onClick={() => act.mutate({ path: `/api/members/${id}/status`, body: { status: "active", date: todayInDhaka() } })}>
-                  Reactivate member
-                </DropdownMenuItem>
-              )}
-              {member.status !== "exited" && <DropdownMenuItem onClick={() => setStatusOpen(true)}>Mark exited…</DropdownMenuItem>}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onClick={() => setRemoveOpen(true)}>
-                Remove member…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <MemberActions member={member} onRemoved={() => navigate({ to: "/members", search: MEMBERS_SEARCH })} />
         </div>
       </header>
 
@@ -383,12 +352,14 @@ function MemberDetailPage() {
         </Card>
       </div>
 
+      <LoansSection memberId={id} onSaved={invalidate} />
+
       <Card>
         <CardHeader>
           <CardTitle>Billing timeline</CardTitle>
           <CardDescription>
-            {timelineYear} — each month&rsquo;s bill with payments applied oldest-first (FIFO, ADR-0001). Months after{" "}
-            {formatMonth(currentMonth)} are upcoming, projected at today&rsquo;s shares and price.
+            Contributions cover the oldest bills first. Dashed months after {formatMonth(currentMonth)} are estimates, not amounts due.
+            Blue months are covered by an advance.
           </CardDescription>
           <CardAction>
             <div className="flex items-center gap-1.5">
@@ -407,10 +378,10 @@ function MemberDetailPage() {
             {Array.from({ length: 12 }, (_, index) => {
               const month = `${timelineYear}-${String(index + 1).padStart(2, "0")}`;
               const cell = timeline.find((entry) => entry.month === month);
-              const status = cell?.status ?? "not-billed";
+              const status = displayMonthStatus(cell, currentMonth);
               const upcoming = month > currentMonth;
               const spoken = cell
-                ? `${status.replaceAll("-", " ")}, bill ${formatTaka(cell.bill)}, applied ${formatTaka(cell.applied)}`
+                ? `${status.replaceAll("-", " ")}, ${upcoming ? "estimated bill" : "bill"} ${formatTaka(cell.bill)}, ${upcoming ? "advance allocated" : "applied"} ${formatTaka(cell.applied)}`
                 : "not billed";
               return (
                 <div
@@ -423,15 +394,17 @@ function MemberDetailPage() {
                     <StatusBadge status={status} />
                   </div>
                   <p className="font-display text-lg leading-none tabular">{cell && cell.bill > 0 ? formatTaka(cell.bill) : "—"}</p>
-                  <p className="text-[11px] text-muted-foreground tabular">applied {formatTaka(cell?.applied ?? 0)}</p>
+                  <p className="text-[11px] text-muted-foreground tabular">
+                    {upcoming && cell && cell.bill > 0
+                      ? cell.applied > 0 ? `${formatTaka(cell.applied)} from advance` : "Not due yet"
+                      : `Applied ${formatTaka(cell?.applied ?? 0)}`}
+                  </p>
                 </div>
               );
             })}
           </div>
         </CardContent>
       </Card>
-
-      <LoansSection memberId={id} onSaved={invalidate} />
 
       <ShareChangeDialog
         key={`${currentShares}-${shares.length}`}
@@ -446,42 +419,6 @@ function MemberDetailPage() {
         }}
       />
 
-      <StatusChangeDialog
-        open={statusOpen}
-        onOpenChange={setStatusOpen}
-        memberName={member.name}
-        pending={act.isPending}
-        onSubmit={(date, note) => {
-          act.mutate({ path: `/api/members/${id}/status`, body: { status: "exited", date, note } });
-          setStatusOpen(false);
-        }}
-      />
-
-      <Dialog open={removeOpen} onOpenChange={setRemoveOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Remove {member.name}?</DialogTitle>
-            <DialogDescription>
-              The member is soft-deleted and disappears from lists and billing. Their ledger entries stay intact.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setRemoveOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                act.mutate({ path: `/api/members/${id}`, method: "DELETE" });
-                setRemoveOpen(false);
-                navigate({ to: "/members", search: MEMBERS_SEARCH });
-              }}
-            >
-              Remove member
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -538,70 +475,22 @@ function ShareChangeDialog({
   );
 }
 
-function StatusChangeDialog({
-  open,
-  onOpenChange,
-  memberName,
-  pending,
-  onSubmit,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  memberName: string;
-  pending: boolean;
-  onSubmit: (date: string, note: string | undefined) => void;
-}) {
-  const [date, setDate] = useState(todayInDhaka());
-  const [note, setNote] = useState("");
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>Mark {memberName} as exited</DialogTitle>
-          <DialogDescription>Billing stops from the effective date. You can record a reason for the ledger.</DialogDescription>
-        </DialogHeader>
-        <form
-          className="grid grid-cols-1 gap-4"
-          onSubmit={(event) => {
-            event.preventDefault();
-            onSubmit(date, note || undefined);
-          }}
-        >
-          <Field label="Effective date" htmlFor="status-date">
-            <Input id="status-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-          </Field>
-          <Field label="Note" htmlFor="status-note" hint="Optional">
-            <Input id="status-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="e.g. Relocated" />
-          </Field>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="destructive" disabled={pending || !date}>
-              {pending ? "Saving…" : "Mark exited"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const [newLoanOpen, setNewLoanOpen] = useState(false);
-  const [repaying, setRepaying] = useState<LoanRowView | null>(null);
-  const [removing, setRemoving] = useState<LoanRowView | null>(null);
+  const [repaying, setRepaying] = useState<LoanView | null>(null);
+  const [removing, setRemoving] = useState<LoanView | null>(null);
 
   const loansQuery = useQuery({
     queryKey: ["loans", memberId],
-    queryFn: () => api<{ loans: LoanRowView[]; totalOutstanding: number }>(`/api/members/${memberId}/loans`),
+    queryFn: () => api<{ loans: LoanView[]; totalOutstanding: number }>(`/api/members/${memberId}/loans`),
   });
 
   const refresh = () => {
     onSaved();
     queryClient.invalidateQueries({ queryKey: ["loans", memberId] });
+    queryClient.invalidateQueries({ queryKey: ["banks"] });
+    queryClient.invalidateQueries({ queryKey: ["transactions"] });
   };
 
   const removeLoan = useMutation({
@@ -620,15 +509,10 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Loans</CardTitle>
-        <CardDescription>Money this member has taken from the fund and repaid.</CardDescription>
+        <CardTitle>Loans &amp; repayments</CardTitle>
+        <CardDescription>Interest-free loans, separate from savings contributions and advances.</CardDescription>
         <CardAction>
           <div className="flex items-center gap-2">
-            {totalOutstanding > 0 && (
-              <Badge variant="destructive" className="tabular">
-                {formatTaka(totalOutstanding)} outstanding
-              </Badge>
-            )}
             <Button className="gap-2" onClick={() => setNewLoanOpen(true)}>
               <PlusIcon className="size-4" />
               New loan
@@ -642,51 +526,81 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
             <Skeleton className="h-12 w-full" />
             <Skeleton className="h-12 w-full" />
           </div>
+        ) : loansQuery.isError ? (
+          <EmptyState
+            icon={HandCoinsIcon}
+            title="Could not load loans"
+            description={loansQuery.error.message}
+            action={<Button variant="outline" onClick={() => loansQuery.refetch()}>Try again</Button>}
+          />
         ) : loans.length > 0 ? (
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px] text-sm">
-              <thead>
-                <tr className="border-b border-border text-left text-[11px] font-semibold tracking-[0.07em] text-muted-foreground uppercase">
-                  <th scope="col" className="py-2 pr-4 font-semibold">Taken</th>
-                  <th scope="col" className="py-2 pr-4 text-right font-semibold">Principal</th>
-                  <th scope="col" className="py-2 pr-4 text-right font-semibold">Repaid</th>
-                  <th scope="col" className="py-2 pr-4 text-right font-semibold">Outstanding</th>
-                  <th scope="col" className="py-2 text-right font-semibold">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {loans.map((loan) => (
-                  <tr key={loan.id}>
-                    <td className="py-3 pr-4">
-                      <p className="font-medium tabular">{formatDay(loan.date)}</p>
-                      {loan.note && <p className="text-xs text-muted-foreground">{loan.note}</p>}
-                    </td>
-                    <td className="py-3 pr-4 text-right tabular">{formatTaka(loan.amount)}</td>
-                    <td className="py-3 pr-4 text-right tabular">{formatTaka(loan.repaid)}</td>
-                    <td className="py-3 pr-4 text-right">
-                      {loan.settled ? (
-                        <Badge variant="success">Settled</Badge>
-                      ) : (
-                        <Amount value={loan.outstanding} tone="negative" />
-                      )}
-                    </td>
-                    <td className="py-3 text-right whitespace-nowrap">
-                      {!loan.settled && (
-                        <Button variant="outline" size="sm" className="gap-1.5" onClick={() => setRepaying(loan)}>
-                          <RotateCcwIcon className="size-3.5" />
-                          Repay
-                        </Button>
-                      )}
-                      <Button variant="ghost" size="sm" className="ml-1 text-muted-foreground" onClick={() => setRemoving(loan)}>
-                        Remove
+          <div className="flex flex-col gap-5">
+            <dl className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div>
+                <dt className="text-xs text-muted-foreground">Total taken</dt>
+                <dd className="mt-1 font-display text-2xl tabular">{formatTaka(loans.reduce((sum, loan) => sum + loan.amount, 0))}</dd>
+                <dd className="mt-1 text-xs text-muted-foreground">{loans.length} {loans.length === 1 ? "loan" : "loans"} in total</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Total repaid</dt>
+                <dd className="mt-1 font-display text-2xl text-success tabular">{formatTaka(loans.reduce((sum, loan) => sum + loan.repaid, 0))}</dd>
+                <dd className="mt-1 text-xs text-muted-foreground">Repayments recorded: {loans.reduce((sum, loan) => sum + loan.repayments.length, 0)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Left to repay</dt>
+                <dd className="mt-1 font-display text-2xl tabular">{formatTaka(totalOutstanding)}</dd>
+                <dd className="mt-1 text-xs text-muted-foreground">
+                  {loans.filter((loan) => !loan.settled).length} open · {loans.filter((loan) => loan.settled).length} cleared
+                </dd>
+              </div>
+            </dl>
+            {loans.map((loan, index) => (
+              <article key={loan.id} aria-label={`Loan ${index + 1} from ${formatDay(loan.date)}`} className="flex flex-col gap-4 rounded-lg border border-border p-4 sm:p-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-sm font-semibold">Loan {index + 1} · {formatDay(loan.date)}</h3>
+                      <Badge variant={loan.settled ? "success" : loan.repaid > 0 ? "info" : "outline"}>
+                        {loan.settled ? "Cleared" : loan.repaid > 0 ? "Repaying" : "Not repaid"}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 break-words text-xs text-muted-foreground">From {loan.bankName} · #{loan.id.slice(0, 8)}</p>
+                    {loan.note && <p className="mt-1 break-words text-sm text-muted-foreground">{loan.note}</p>}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!loan.settled && (
+                      <Button size="sm" onClick={() => setRepaying(loan)}>
+                        <RotateCcwIcon data-icon="inline-start" />
+                        Record repayment
                       </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    )}
+                    <Button variant="ghost" size="sm" onClick={() => setRemoving(loan)}>Remove</Button>
+                  </div>
+                </div>
+                <dl className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-3">
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Principal</dt>
+                    <dd className="mt-1 font-medium tabular">{formatTaka(loan.amount)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Repaid</dt>
+                    <dd className="mt-1 font-medium text-success tabular">{formatTaka(loan.repaid)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-muted-foreground">Remaining</dt>
+                    <dd className="mt-1"><Amount value={loan.outstanding} tone="neutral" /></dd>
+                  </div>
+                </dl>
+                <div className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>{loan.repayments.length} {loan.repayments.length === 1 ? "repayment" : "repayments"}</span>
+                    <span className="tabular">{Math.round(loan.repaid / loan.amount * 100)}% repaid</span>
+                  </div>
+                  <Progress value={loan.repaid / loan.amount * 100} aria-label={`Loan ${index + 1} repaid`} />
+                </div>
+                <LoanHistory loan={loan} />
+              </article>
+            ))}
           </div>
         ) : (
           <EmptyState
@@ -710,12 +624,17 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
         onSaved={refresh}
       />
 
-      <RepayDialog
-        key={repaying?.id ?? "none"}
-        loan={repaying}
-        onClose={() => setRepaying(null)}
-        onSaved={refresh}
-      />
+      <Dialog open={Boolean(repaying)} onOpenChange={(open) => !open && setRepaying(null)}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Record a loan repayment</DialogTitle>
+            <DialogDescription>Return money to the fund against this loan.</DialogDescription>
+          </DialogHeader>
+          {repaying && (
+            <LoanRepaymentForm memberId={memberId} loanId={repaying.id} onDone={() => setRepaying(null)} />
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(removing)} onOpenChange={(open) => !open && setRemoving(null)}>
         <DialogContent className="sm:max-w-md">
@@ -736,6 +655,54 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
         </DialogContent>
       </Dialog>
     </Card>
+  );
+}
+
+function LoanHistory({ loan }: { loan: LoanView }) {
+  let remaining = loan.amount;
+  const history = loan.repayments.map((repayment) => {
+    remaining -= repayment.amount;
+    return { ...repayment, remaining };
+  });
+
+  return (
+    <details open className="group/history border-t border-border pt-3">
+      <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-2 rounded-md text-xs font-medium focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+        Repayment history
+        <ChevronDownIcon aria-hidden className="size-4 text-muted-foreground group-open/history:rotate-180" />
+      </summary>
+      <ol className="mt-3 flex flex-col gap-4 border-l border-border pl-4 text-sm">
+        <li className="flex flex-wrap justify-between gap-x-4 gap-y-1">
+          <div>
+            <p className="font-medium">Loan taken</p>
+            <p className="text-xs text-muted-foreground">{formatDay(loan.date)} · {loan.bankName}</p>
+          </div>
+          <p className="font-medium tabular">{formatTaka(loan.amount)}</p>
+        </li>
+        {history.map((repayment, index) => (
+          <li key={repayment.id} className="flex flex-wrap justify-between gap-x-4 gap-y-1">
+            <div className="min-w-0">
+              <p className="font-medium">Repayment {index + 1}</p>
+              <p className="break-words text-xs text-muted-foreground">{formatDay(repayment.creditDate)} · {repayment.bankName}</p>
+            </div>
+            <div className="text-right">
+              <p className="font-medium text-success tabular">{formatTaka(repayment.amount)}</p>
+              <p className="text-xs text-muted-foreground tabular">{formatTaka(repayment.remaining)} remaining</p>
+            </div>
+          </li>
+        ))}
+        {loan.settled && history.length > 0 && (
+          <li className="flex items-start gap-2 text-success">
+            <CheckCircle2Icon aria-hidden className="mt-0.5 size-4 shrink-0" />
+            <div>
+              <p className="font-medium">Loan cleared · {formatDay(history[history.length - 1]!.creditDate)}</p>
+              <p className="text-xs">Fully repaid in {history.length} {history.length === 1 ? "repayment" : "repayments"}.</p>
+            </div>
+          </li>
+        )}
+      </ol>
+      {history.length === 0 && <p className="mt-4 text-xs text-muted-foreground">No repayments yet. Record a repayment when money returns to a bank account.</p>}
+    </details>
   );
 }
 
@@ -792,7 +759,7 @@ function NewLoanDialog({
             <Input id="loan-amount" inputMode="numeric" placeholder="0" value={amount} onChange={(event) => setAmount(event.target.value)} />
           </Field>
           <Field label="Date" htmlFor="loan-date" required>
-            <Input id="loan-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+            <DatePicker id="loan-date" value={date} onChange={setDate} required />
           </Field>
           <Field
             label="Bank account"
@@ -814,70 +781,6 @@ function NewLoanDialog({
             </Button>
             <Button type="submit" disabled={saving || !amount || !bankAccountId || over}>
               {saving ? "Recording…" : "Give loan"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function RepayDialog({ loan, onClose, onSaved }: { loan: LoanRowView | null; onClose: () => void; onSaved: () => void }) {
-  const [amount, setAmount] = useState("");
-  const [bankAccountId, setBankAccountId] = useState("");
-  const [date, setDate] = useState(todayInDhaka());
-  const [saving, setSaving] = useState(false);
-
-  const outstanding = loan?.outstanding ?? 0;
-  const value = amount || String(outstanding);
-
-  const repay = useMutation({
-    mutationFn: (body: { loanId: string; amount: number; bankAccountId: string; creditDate: string }) =>
-      api(`/api/loans/${body.loanId}`, { method: "POST", body: JSON.stringify({ amount: body.amount, bankAccountId: body.bankAccountId, creditDate: body.creditDate }) }),
-    onSuccess: () => {
-      toast.success("Repayment recorded");
-      setAmount("");
-      setBankAccountId("");
-      onClose();
-      onSaved();
-    },
-    onError: (error: Error) => toast.error(error.message),
-    onSettled: () => setSaving(false),
-  });
-
-  return (
-    <Dialog open={Boolean(loan)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Record a repayment</DialogTitle>
-          <DialogDescription>
-            {loan ? `${formatTaka(outstanding)} outstanding on the loan from ${formatDay(loan.date)}.` : ""}
-          </DialogDescription>
-        </DialogHeader>
-        <form
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!loan) return;
-            setSaving(true);
-            repay.mutate({ loanId: loan.id, amount: Number(value), bankAccountId, creditDate: date });
-          }}
-        >
-          <Field label="Amount (৳)" htmlFor="repay-amount" required>
-            <Input id="repay-amount" inputMode="numeric" value={value} onChange={(event) => setAmount(event.target.value)} />
-          </Field>
-          <Field label="Date received" htmlFor="repay-date" required>
-            <Input id="repay-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
-          </Field>
-          <Field label="Bank account" htmlFor="repay-bank" required className="sm:col-span-2">
-            <BankSelect id="repay-bank" value={bankAccountId} onChange={setBankAccountId} />
-          </Field>
-          <DialogFooter className="sm:col-span-2">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving || !bankAccountId || !value || Number(value) <= 0}>
-              {saving ? "Recording…" : "Record repayment"}
             </Button>
           </DialogFooter>
         </form>
@@ -912,6 +815,7 @@ function cellTone(status: string): string {
     case "paid":
       return "border-success/25 bg-success/[0.06]";
     case "advance":
+    case "partial-advance":
       return "border-info/25 bg-info/[0.06]";
     case "partial":
       return "border-warning/30 bg-warning/[0.07]";

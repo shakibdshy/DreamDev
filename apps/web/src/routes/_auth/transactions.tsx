@@ -1,9 +1,8 @@
-import { debounce } from "@tanstack/pacer";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
 import { ArrowDownLeftIcon, ArrowUpRightIcon, MoreHorizontalIcon, PencilIcon, PlusIcon, ReceiptTextIcon, Trash2Icon } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
 
@@ -21,8 +20,10 @@ import { cn } from "@DreamDev/ui/lib/utils";
 import { FEED_TYPES, listFeedQuerySchema } from "@/api/transactions/schema";
 import { Amount } from "@/components/amount";
 import { BankSelect, useBankBalance } from "@/components/bank-select";
+import { DatePicker } from "@/components/date-picker";
 import { EmptyState } from "@/components/empty-state";
 import { Field } from "@/components/field";
+import { LoanRepaymentForm } from "@/components/loan-repayment-form";
 import { MemberSelect } from "@/components/member-select";
 import { PageHeader } from "@/components/page-header";
 import { Pagination } from "@/components/pagination";
@@ -45,7 +46,7 @@ type FeedRow = {
 
 type FeedResponse = { data: FeedRow[]; meta: { page: number; pageSize: number; total: number } };
 
-const ENTRY_TYPES = ["contribution", "expense", "transfer", "adjustment"] as const;
+const ENTRY_TYPES = ["contribution", "loan_repayment", "expense", "transfer", "adjustment"] as const;
 type EntryType = (typeof ENTRY_TYPES)[number];
 
 const EDITABLE_TYPES = new Set(["contribution", "expense", "transfer", "adjustment"]);
@@ -69,20 +70,10 @@ function TransactionsPage() {
   const [editing, setEditing] = useState<FeedRow | null>(null);
   const [deleting, setDeleting] = useState<FeedRow | null>(null);
 
-  // Accumulate patches so two quick filter changes never drop the first
-  const pendingPatch = useRef<Record<string, string | undefined>>({});
-  const onFilter = useMemo(
-    () =>
-      debounce(
-        (patch: Record<string, string | undefined>) => {
-          const merged = { ...pendingPatch.current, ...patch };
-          pendingPatch.current = {};
-          navigate({ search: (prev) => ({ ...prev, ...merged, page: 1 }) });
-        },
-        { wait: 300 },
-      ),
-    [navigate],
-  );
+  // Discrete selections apply immediately so a delayed update cannot restore cleared filters.
+  const onFilter = (patch: Record<string, string | undefined>) => {
+    navigate({ search: (prev) => ({ ...prev, ...patch, page: 1 }) });
+  };
 
   const feedQueryKey = ["transactions", search] as const;
   const feedQuery = useQuery({
@@ -97,7 +88,6 @@ function TransactionsPage() {
   const activeFilters = Boolean(search.type || search.from || search.to);
 
   const clearFilters = () => {
-    pendingPatch.current = {};
     navigate({ search: (prev) => ({ ...prev, type: undefined, from: undefined, to: undefined, page: 1 }) });
   };
 
@@ -205,13 +195,13 @@ function TransactionsPage() {
               <label htmlFor="filter-from" className="text-xs font-medium text-muted-foreground">
                 From
               </label>
-              <Input id="filter-from" type="date" defaultValue={search.from ?? ""} onChange={(event) => onFilter({ from: event.target.value || undefined })} />
+              <DatePicker id="filter-from" value={search.from ?? ""} placeholder="Start date" onChange={(value) => onFilter({ from: value || undefined })} />
             </div>
             <div className="flex flex-col gap-1.5">
               <label htmlFor="filter-to" className="text-xs font-medium text-muted-foreground">
                 To
               </label>
-              <Input id="filter-to" type="date" defaultValue={search.to ?? ""} onChange={(event) => onFilter({ to: event.target.value || undefined })} />
+              <DatePicker id="filter-to" value={search.to ?? ""} placeholder="End date" onChange={(value) => onFilter({ to: value || undefined })} />
             </div>
             {activeFilters && (
               <Button variant="ghost" className="col-span-2 justify-self-start sm:justify-self-auto" onClick={clearFilters}>
@@ -395,6 +385,7 @@ function TransactionsPage() {
           </div>
 
           {entryType === "contribution" && <ContributionForm onCreate={createContribution.mutateAsync} onDone={() => setEntryOpen(false)} />}
+          {entryType === "loan_repayment" && <LoanRepaymentForm onDone={() => setEntryOpen(false)} />}
           {entryType === "expense" && <ExpenseForm onDone={() => setEntryOpen(false)} />}
           {entryType === "transfer" && <TransferForm onDone={() => setEntryOpen(false)} />}
           {entryType === "adjustment" && isAdmin && <AdjustmentForm onDone={() => setEntryOpen(false)} />}
@@ -562,7 +553,7 @@ function ExpenseForm({ onDone }: { onDone: () => void }) {
         <Input id="expense-amount" inputMode="numeric" placeholder="0" value={amount} onChange={(event) => setAmount(event.target.value)} />
       </Field>
       <Field label="Date" htmlFor="expense-date" required>
-        <Input id="expense-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        <DatePicker id="expense-date" required value={date} onChange={setDate} disabled={create.isPending} />
       </Field>
       <Field label="Note" htmlFor="expense-note" hint="Optional">
         <Input id="expense-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Bank charges, cash withdrawal…" />
@@ -614,7 +605,7 @@ function TransferForm({ onDone }: { onDone: () => void }) {
         <Input id="transfer-amount" inputMode="numeric" placeholder="0" value={amount} onChange={(event) => setAmount(event.target.value)} />
       </Field>
       <Field label="Date" htmlFor="transfer-date" required>
-        <Input id="transfer-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        <DatePicker id="transfer-date" required value={date} onChange={setDate} disabled={create.isPending} />
       </Field>
       <p className="text-xs text-muted-foreground sm:col-span-2">Moves money between the team&rsquo;s own accounts — total holdings stay the same.</p>
       <DialogFooter className="sm:col-span-2">
@@ -752,7 +743,7 @@ function ContributionForm({ onCreate, onDone }: { onCreate: CreateContribution; 
       <form.Field name="creditDate" validators={{ onChange: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date") }}>
         {(field) => (
           <Field label="Credit date" htmlFor="t-date" required error={firstError(field.state.meta.errors)}>
-            <Input id="t-date" type="date" value={field.state.value} onBlur={field.handleBlur} onChange={(event) => field.handleChange(event.target.value)} />
+            <DatePicker id="t-date" required value={field.state.value} onBlur={field.handleBlur} onChange={field.handleChange} aria-invalid={field.state.meta.errors.length > 0} />
           </Field>
         )}
       </form.Field>

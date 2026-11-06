@@ -21,6 +21,7 @@ function requireAdmin(session: Session | null) {
 const publicAccount = {
   id: true,
   bankName: true,
+  accountNumber: true,
   address: true,
   openingBalance: true,
   createdAt: true,
@@ -29,6 +30,7 @@ const publicAccount = {
 export interface BankAccountItem {
   id: string;
   bankName: string;
+  accountNumber: string | null;
   address: string | null;
   openingBalance: number;
   /** Derived: Opening Balance + money in − money out (GLOSSARY.md, never stored). */
@@ -122,9 +124,10 @@ export async function listBanks(deps: BanksDeps, query: unknown): Promise<{ data
   );
 
   return {
-    data: accounts.map(({ id, bankName, address, openingBalance, createdAt }) => ({
+    data: accounts.map(({ id, bankName, accountNumber, address, openingBalance, createdAt }) => ({
       id,
       bankName,
+      accountNumber,
       address,
       openingBalance,
       currentBalance: openingBalance + (deltas.get(id) ?? 0),
@@ -138,7 +141,7 @@ export async function createBank(deps: BanksDeps, body: unknown) {
   const user = requireUser(deps.session);
   const input = parseOr422(createBankBodySchema, body);
   return deps.db.bankAccount.create({
-    data: { bankName: input.bankName, address: input.address, openingBalance: input.openingBalance, createdBy: user.id },
+    data: { bankName: input.bankName, accountNumber: input.accountNumber, address: input.address, openingBalance: input.openingBalance, createdBy: user.id },
     select: publicAccount,
   });
 }

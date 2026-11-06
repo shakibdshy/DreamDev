@@ -3,7 +3,7 @@ import type { Database } from "@DreamDev/db";
 import { addMonths, monthOfDate } from "@DreamDev/db/domain/month";
 import { billForMonth } from "@DreamDev/db/domain/billing";
 import { dueSummary } from "@DreamDev/db/domain/due";
-import { projectMonths } from "@DreamDev/db/domain/projection";
+import { projectMonths, type MonthCell } from "@DreamDev/db/domain/projection";
 
 import { requireUser } from "../http";
 import { getPriceEntries, memberFacts, toMemberEntries } from "../members/billing-facts";
@@ -28,7 +28,7 @@ export interface DashboardData {
   };
   monthlySeries: { month: string; collected: number }[];
   gridYear: number;
-  grid: { memberId: string; name: string; cells: { month: string; status: string; bill: number; applied: number }[] }[];
+  grid: { memberId: string; name: string; cells: MonthCell[] }[];
   topDues: { memberId: string; name: string; due: number }[];
   recent: FeedEntry[];
   loansPerMember: { memberId: string; name: string; outstanding: number }[];

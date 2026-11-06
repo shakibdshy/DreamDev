@@ -67,6 +67,19 @@ describe("loans", () => {
     expect(view.totalOutstanding).toBe(0);
   });
 
+  test("history includes every repayment in date order, its bank and the cleared loan", async () => {
+    const otherBank = await db.bankAccount.create({ data: { bankName: "BRAC", openingBalance: 0 } });
+    const { loan } = await createLoan({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 10000, date: `${thisMonth}-01` });
+    const later = await createRepayment({ db, session: editor }, loan.id, { bankAccountId: otherBank.id, amount: 6000, creditDate: `${thisMonth}-20` });
+    const earlier = await createRepayment({ db, session: editor }, loan.id, { bankAccountId: bankId, amount: 4000, creditDate: `${thisMonth}-10` });
+    const view = await memberLoans({ db, session: editor }, memberId);
+    expect(view.loans[0]).toMatchObject({ bankName: "DBBL", amount: 10000, repaid: 10000, outstanding: 0, settled: true });
+    expect(view.loans[0]?.repayments).toEqual([
+      { id: earlier.repayment.id, amount: 4000, creditDate: `${thisMonth}-10`, bankName: "DBBL" },
+      { id: later.repayment.id, amount: 6000, creditDate: `${thisMonth}-20`, bankName: "BRAC" },
+    ]);
+  });
+
   test("repayment is capped at outstanding with Contribution guidance", async () => {
     const { loan } = await createLoan({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 5000, date: `${thisMonth}-10` });
     await expect(

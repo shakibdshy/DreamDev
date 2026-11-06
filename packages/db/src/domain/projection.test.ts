@@ -1,12 +1,31 @@
 import { describe, expect, test } from "bun:test";
 
 import type { MemberEntry } from "./due";
-import { projectMonths } from "./projection";
+import { displayMonthStatus, projectMonths, type MonthCell } from "./projection";
 import { memberFacts } from "./test-support";
 
 function contrib(date: string, amount: number): MemberEntry {
   return { date, amount, kind: "contribution" };
 }
+
+describe("billing display distinguishes future projections from current debt", () => {
+  test("future months are upcoming, partially advanced or advanced, never due", () => {
+    const cell: MonthCell = { month: "2027-02", bill: 15000, applied: 0, status: "due" };
+    expect(displayMonthStatus(cell, "2026-11")).toBe("upcoming");
+    expect(displayMonthStatus({ ...cell, applied: 5000, status: "partial" }, "2026-11")).toBe("partial-advance");
+    expect(displayMonthStatus({ ...cell, applied: 15000, status: "paid" }, "2026-11")).toBe("advance");
+    expect(displayMonthStatus({ ...cell, bill: 0, status: "not-billed" }, "2026-11")).toBe("not-billed");
+    expect(displayMonthStatus(undefined, "2026-11")).toBe("not-billed");
+  });
+
+  test("current and past months keep their actual status as the calendar advances", () => {
+    const cell: MonthCell = { month: "2027-01", bill: 15000, applied: 0, status: "due" };
+    expect(displayMonthStatus(cell, "2026-12")).toBe("upcoming");
+    expect(displayMonthStatus(cell, "2027-01")).toBe("due");
+    expect(displayMonthStatus(cell, "2027-02")).toBe("due");
+    expect(displayMonthStatus({ ...cell, applied: 15000, status: "paid" }, "2027-01")).toBe("paid");
+  });
+});
 
 describe("member×month projection (FIFO, display-only — ADR-0001)", () => {
   test("labels each month paid / partial / due", () => {
@@ -36,6 +55,17 @@ describe("member×month projection (FIFO, display-only — ADR-0001)", () => {
     expect(statuses.slice(2)).toEqual(Array(9).fill("due"));
     expect(cells[0]?.applied).toBe(15000);
     expect(cells[1]?.applied).toBe(15000);
+  });
+
+  test("payments already spent in the previous year are not reused in January", () => {
+    const member = memberFacts({ joiningMonth: "2026-11", allotments: [{ effectiveMonth: "2026-11", quantity: 3 }] });
+    for (const amount of [30000, 37500, 45000]) {
+      const entries = [contrib("2026-11-06", amount)];
+      const nextYear = projectMonths(member, entries, "2027-01", "2027-12");
+      const fullRange = projectMonths(member, entries, "2026-11", "2027-12");
+      expect(nextYear[0]?.applied).toBe(amount - 30000);
+      expect(nextYear[0]).toEqual(fullRange.find((cell) => cell.month === "2027-01"));
+    }
   });
 
   test("carry from before the range seeds the first projected month", () => {

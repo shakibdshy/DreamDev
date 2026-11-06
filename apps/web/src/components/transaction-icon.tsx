@@ -3,7 +3,7 @@ import { ArrowDownLeftIcon, ArrowLeftRightIcon, ArrowUpRightIcon, ReceiptIcon, R
 export const TYPE_LABELS: Record<string, string> = {
   contribution: "Contribution",
   loan: "Loan",
-  loan_repayment: "Repayment",
+  loan_repayment: "Loan repayment",
   expense: "Expense",
   transfer: "Transfer",
   adjustment: "Adjustment",

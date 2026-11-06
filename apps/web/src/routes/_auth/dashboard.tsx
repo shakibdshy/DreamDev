@@ -13,6 +13,7 @@ import { useState } from "react";
 
 import { formatTaka } from "@DreamDev/db/domain/money";
 import { monthOfDate } from "@DreamDev/db/domain/month";
+import { displayMonthStatus } from "@DreamDev/db/domain/projection";
 import { Button, buttonVariants } from "@DreamDev/ui/components/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@DreamDev/ui/components/card";
 import { Progress } from "@DreamDev/ui/components/progress";
@@ -201,8 +202,8 @@ function DashboardPage() {
         <CardHeader>
           <CardTitle>Billing grid</CardTitle>
           <CardDescription>
-            Monthly standing per member for {data.gridYear}. Months after {formatMonth(currentMonth)} are upcoming — projected at today&rsquo;s shares
-            and price. Hover or focus a cell for its bill and applied amount.
+            Monthly standing for {data.gridYear}. Dashed months after {formatMonth(currentMonth)} are estimates, not amounts due.
+            Blue means advance coverage; gray means upcoming. Hover or focus a cell for details.
           </CardDescription>
           <CardAction>
             <div className="flex items-center gap-1.5">
@@ -245,8 +246,9 @@ function DashboardPage() {
                         const month = `${data.gridYear}-${String(index + 1).padStart(2, "0")}`;
                         const cell = row.cells.find((entry) => entry.month === month);
                         const upcoming = month > currentMonth;
+                        const status = displayMonthStatus(cell, currentMonth);
                         const label = cell
-                          ? `${row.name}, ${MONTH_LABELS[index]} ${data.gridYear}${upcoming ? " (upcoming projection)" : ""}: ${cell.status}, bill ${formatTaka(cell.bill)}, applied ${formatTaka(cell.applied)}`
+                          ? `${row.name}, ${MONTH_LABELS[index]} ${data.gridYear}${upcoming ? " (upcoming projection)" : ""}: ${status.replaceAll("-", " ")}, ${upcoming ? "estimated bill" : "bill"} ${formatTaka(cell.bill)}, ${upcoming ? "advance allocated" : "applied"} ${formatTaka(cell.applied)}`
                           : `${row.name}, ${MONTH_LABELS[index]} ${data.gridYear}${upcoming ? " (upcoming projection)" : ""}: not billed`;
                         return (
                           <td key={month} className="px-1 py-1.5 text-center">
@@ -257,8 +259,8 @@ function DashboardPage() {
                               title={label}
                               className={cn(
                                 "mx-auto block size-6 rounded-md outline-none ring-offset-2 ring-offset-card transition-[box-shadow,background-color] duration-150 hover:ring-2 hover:ring-ring/40 focus-visible:ring-2 focus-visible:ring-ring",
-                                cellColor(cell?.status),
-                                upcoming && "opacity-45 outline-dashed outline-1 -outline-offset-1 outline-foreground/30",
+                                cellColor(status),
+                                upcoming && "outline-dashed outline-1 -outline-offset-1 outline-foreground/30",
                               )}
                             />
                           </td>
@@ -283,10 +285,11 @@ function DashboardPage() {
               [
                 ["Paid", "bg-success"],
                 ["Advance", "bg-info"],
+                ["Part advance", "bg-info/40"],
                 ["Partial", "bg-warning"],
                 ["Due", "bg-destructive"],
                 ["Not billed", "bg-muted-foreground/20"],
-                ["Upcoming", "outline-dashed outline-1 outline-foreground/30"],
+                ["Upcoming", "bg-muted-foreground/15 outline-dashed outline-1 outline-foreground/30"],
               ] as const
             ).map(([label, className]) => (
               <span key={label} className="flex items-center gap-1.5">
@@ -571,6 +574,8 @@ function cellColor(status: string | undefined): string {
       return "bg-success/85 hover:bg-success";
     case "advance":
       return "bg-info/85 hover:bg-info";
+    case "partial-advance":
+      return "bg-info/40 hover:bg-info/60";
     case "partial":
       return "bg-warning/85 hover:bg-warning";
     case "due":

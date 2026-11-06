@@ -46,7 +46,7 @@ export function BankSelect({
       <option value="">{banksQuery.isLoading ? "Loading accounts…" : "Select a Bank Account"}</option>
       {banksQuery.data?.data.map((bank) => (
         <option key={bank.id} value={bank.id}>
-          {bank.bankName} — {formatTaka(bank.currentBalance)}
+          {bank.bankName}{bank.accountNumber ? ` · ${bank.accountNumber}` : ""} — {formatTaka(bank.currentBalance)}
         </option>
       ))}
     </NativeSelect>

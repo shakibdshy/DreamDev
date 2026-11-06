@@ -55,6 +55,7 @@ model ShareAllotment {
 model BankAccount {
   id             String  @id @default(uuid())
   bankName       String
+  accountNumber  String?
   address        String?
   openingBalance Int     @default(0)
   deletedAt      DateTime?

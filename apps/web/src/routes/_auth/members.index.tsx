@@ -2,7 +2,7 @@ import { debounce } from "@tanstack/pacer";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { ChevronRightIcon, ImagePlusIcon, PlusIcon, SearchIcon, UserRoundIcon, UsersIcon } from "lucide-react";
+import { ImagePlusIcon, PlusIcon, SearchIcon, UserRoundIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -19,6 +19,8 @@ import { cn } from "@DreamDev/ui/lib/utils";
 import { listMembersQuerySchema } from "@/api/members/schema";
 import { Amount } from "@/components/amount";
 import { EmptyState } from "@/components/empty-state";
+import { DatePicker } from "@/components/date-picker";
+import { MemberActions } from "@/components/member-actions";
 import { Field } from "@/components/field";
 import { PageHeader } from "@/components/page-header";
 import { Pagination } from "@/components/pagination";
@@ -129,7 +131,7 @@ function MembersPage() {
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Position</TableHead>
                     <TableHead className="w-12">
-                      <span className="sr-only">Open</span>
+                      <span className="sr-only">Member actions</span>
                     </TableHead>
                   </TableRow>
                 </TableHeader>
@@ -157,9 +159,7 @@ function MembersPage() {
                         <Position due={member.due} advance={member.advance} />
                       </TableCell>
                       <TableCell>
-                        <Link to="/members/$id" params={{ id: member.id }} search={{}} aria-label={`Open ${member.name}`}>
-                          <ChevronRightIcon className="size-4 text-muted-foreground/60 transition-colors group-hover:text-foreground" />
-                        </Link>
+                        <MemberActions member={member} compact />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -169,8 +169,8 @@ function MembersPage() {
 
             <ul className="divide-y divide-border/70 md:hidden">
               {rows.map((member) => (
-                <li key={member.id}>
-                  <Link to="/members/$id" params={{ id: member.id }} search={{}} className="flex items-center gap-3 px-5 py-3.5 transition-colors hover:bg-muted/40">
+                <li key={member.id} className="flex items-center gap-1 pr-3">
+                  <Link to="/members/$id" params={{ id: member.id }} search={{}} className="flex min-w-0 flex-1 items-center gap-3 py-3.5 pr-2 pl-5 transition-colors hover:bg-muted/40">
                     <Avatar className="size-10">
                       {member.photo ? <AvatarImage src={member.photo} alt="" loading="lazy" /> : null}
                       <AvatarFallback>{initials(member.name)}</AvatarFallback>
@@ -184,6 +184,7 @@ function MembersPage() {
                       <span className="text-xs text-muted-foreground">{member.shares} shares</span>
                     </div>
                   </Link>
+                  <MemberActions member={member} compact />
                 </li>
               ))}
             </ul>
@@ -354,12 +355,12 @@ function CreateMemberDialog({ open, onOpenChange }: { open: boolean; onOpenChang
           <form.Field name="joiningDate" validators={{ onChange: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a joining date") }}>
             {(field) => (
               <Field label="Joining date" htmlFor="m-joined" required error={firstError(field.state.meta.errors)}>
-                <Input
+                <DatePicker
                   id="m-joined"
-                  type="date"
                   value={field.state.value}
                   onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
+                  onChange={field.handleChange}
+                  required
                 />
               </Field>
             )}

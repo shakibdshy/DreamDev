@@ -1,7 +1,10 @@
 import { z } from "zod";
 
+export const accountNumberSchema = z.string().trim().min(1, "Account number cannot be blank").max(64, "Account number must be 64 characters or fewer");
+
 export const createBankBodySchema = z.object({
   bankName: z.string().trim().min(1, "Bank name is required"),
+  accountNumber: accountNumberSchema.optional(),
   address: z.string().trim().min(1).optional(),
   openingBalance: z.number().int().min(0).default(0),
 });
@@ -9,6 +12,7 @@ export const createBankBodySchema = z.object({
 export const updateBankBodySchema = z
   .object({
     bankName: z.string().trim().min(1).optional(),
+    accountNumber: accountNumberSchema.nullable().optional(),
     address: z.string().trim().min(1).nullable().optional(),
     openingBalance: z.number().int().min(0).optional(),
   })

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
-import { CoinsIcon, LandmarkIcon, MoreHorizontalIcon, PlusIcon, Trash2Icon, WalletIcon } from "lucide-react";
+import { CoinsIcon, LandmarkIcon, MoreHorizontalIcon, PencilIcon, PlusIcon, Trash2Icon, WalletIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -10,11 +10,12 @@ import { formatTaka } from "@DreamDev/db/domain/money";
 import { Button } from "@DreamDev/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@DreamDev/ui/components/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@DreamDev/ui/components/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@DreamDev/ui/components/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuTrigger } from "@DreamDev/ui/components/dropdown-menu";
 import { Input } from "@DreamDev/ui/components/input";
 import { Progress } from "@DreamDev/ui/components/progress";
 import { Skeleton } from "@DreamDev/ui/components/skeleton";
 
+import { accountNumberSchema } from "@/api/banks/schema";
 import type { BankAccountItem } from "@/api/banks/service";
 import { EmptyState } from "@/components/empty-state";
 import { Field } from "@/components/field";
@@ -38,7 +39,7 @@ export const Route = createFileRoute("/_auth/banks")({
 
 function BanksPage() {
   const queryClient = useQueryClient();
-  const [createOpen, setCreateOpen] = useState(false);
+  const [accountForm, setAccountForm] = useState<{ bank: BankRow | null } | null>(null);
   const [removing, setRemoving] = useState<BankRow | null>(null);
 
   const banksQuery = useQuery({
@@ -68,7 +69,7 @@ function BanksPage() {
         title="Bank accounts"
         description="Where the fund's money actually sits, and how it moves."
         actions={
-          <Button onClick={() => setCreateOpen(true)} className="gap-2">
+          <Button onClick={() => setAccountForm({ bank: null })} className="gap-2">
             <PlusIcon className="size-4" />
             Add account
           </Button>
@@ -92,7 +93,7 @@ function BanksPage() {
           {banks.map((bank) => {
             const share = total > 0 ? Math.round((bank.currentBalance / total) * 100) : 0;
             return (
-              <Card key={bank.id}>
+              <Card key={bank.id} className="min-w-0">
                 <CardHeader>
                   <div className="flex items-start justify-between gap-3">
                     <span className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary">
@@ -103,15 +104,31 @@ function BanksPage() {
                         <MoreHorizontalIcon className="size-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
-                        <DropdownMenuItem variant="destructive" onClick={() => setRemoving(bank)}>
-                          <Trash2Icon />
-                          Remove account
-                        </DropdownMenuItem>
+                        <DropdownMenuGroup>
+                          <DropdownMenuItem onClick={() => setAccountForm({ bank })}>
+                            <PencilIcon />
+                            Edit account
+                          </DropdownMenuItem>
+                          <DropdownMenuItem variant="destructive" onClick={() => setRemoving(bank)}>
+                            <Trash2Icon />
+                            Remove account
+                          </DropdownMenuItem>
+                        </DropdownMenuGroup>
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  <CardTitle className="mt-1">{bank.bankName}</CardTitle>
-                  <CardDescription>{bank.address ?? "No address on file"}</CardDescription>
+                  <CardTitle className="mt-1 break-words">{bank.bankName}</CardTitle>
+                  <CardDescription className="break-words">{bank.address ?? "No address on file"}</CardDescription>
+                  <dl className="mt-2 flex min-w-0 flex-col gap-1">
+                    <dt className="text-xs text-muted-foreground">Account number</dt>
+                    <dd className="text-sm">
+                      {bank.accountNumber ? (
+                        <span className="break-all font-mono">{bank.accountNumber}</span>
+                      ) : (
+                        <span className="text-muted-foreground">Not provided</span>
+                      )}
+                    </dd>
+                  </dl>
                 </CardHeader>
                 <CardContent>
                   <p className="text-micro text-muted-foreground">Current balance</p>
@@ -132,7 +149,7 @@ function BanksPage() {
           title="No bank accounts yet"
           description="Add the team's first joint account to start tracking balances and recording entries against it."
           action={
-            <Button onClick={() => setCreateOpen(true)} className="gap-2">
+            <Button onClick={() => setAccountForm({ bank: null })} className="gap-2">
               <PlusIcon className="size-4" />
               Add account
             </Button>
@@ -140,7 +157,13 @@ function BanksPage() {
         />
       )}
 
-      <CreateBankDialog open={createOpen} onOpenChange={setCreateOpen} />
+      {accountForm ? (
+        <BankAccountDialog
+          key={accountForm.bank?.id ?? "new"}
+          bank={accountForm.bank}
+          onClose={() => setAccountForm(null)}
+        />
+      ) : null}
 
       <Dialog open={Boolean(removing)} onOpenChange={(open) => !open && setRemoving(null)}>
         <DialogContent className="sm:max-w-md">
@@ -164,26 +187,34 @@ function BanksPage() {
   );
 }
 
-function CreateBankDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+function BankAccountDialog({ bank, onClose }: { bank: BankRow | null; onClose: () => void }) {
   const queryClient = useQueryClient();
 
   const form = useForm({
-    defaultValues: { bankName: "", address: "", openingBalance: "" },
+    defaultValues: {
+      bankName: bank?.bankName ?? "",
+      accountNumber: bank?.accountNumber ?? "",
+      address: bank?.address ?? "",
+      openingBalance: "",
+    },
     onSubmit: async ({ value }) => {
       try {
-        await api("/api/banks", {
-          method: "POST",
-          body: JSON.stringify({
-            bankName: value.bankName,
-            address: value.address || undefined,
-            openingBalance: Number(value.openingBalance || 0),
-          }),
+        const details = {
+          bankName: value.bankName,
+          accountNumber: value.accountNumber || (bank ? null : undefined),
+          address: value.address.trim() || (bank ? null : undefined),
+        };
+        await api(bank ? `/api/banks/${bank.id}` : "/api/banks", {
+          method: bank ? "PATCH" : "POST",
+          // Editing account details must never overwrite its Opening Balance.
+          body: JSON.stringify(bank ? details : { ...details, openingBalance: Number(value.openingBalance || 0) }),
         });
-        toast.success(`Added ${value.bankName}`);
-        form.reset();
-        onOpenChange(false);
-        await queryClient.invalidateQueries({ queryKey: ["banks"] });
-        await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+        toast.success(`${bank ? "Updated" : "Added"} ${value.bankName}`);
+        onClose();
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["banks"] }),
+          queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+        ]);
       } catch (error) {
         toast.error((error as Error).message);
       }
@@ -191,11 +222,15 @@ function CreateBankDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add a bank account</DialogTitle>
-          <DialogDescription>Opening balance is the account&rsquo;s starting point when it joins the fund.</DialogDescription>
+          <DialogTitle>{bank ? "Edit bank account" : "Add a bank account"}</DialogTitle>
+          <DialogDescription>
+            {bank
+              ? "Update the account details. Opening balance will stay unchanged."
+              : "Opening balance is the account’s starting point when it joins the fund."}
+          </DialogDescription>
         </DialogHeader>
         <form
           className="grid grid-cols-1 gap-4 sm:grid-cols-2"
@@ -210,7 +245,32 @@ function CreateBankDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
               <Field label="Bank name" htmlFor="bank-name" required error={firstError(field.state.meta.errors)} className="sm:col-span-2">
                 <Input
                   id="bank-name"
+                  required
+                  aria-invalid={field.state.meta.errors.length > 0}
                   placeholder="e.g. Dutch-Bangla Bank"
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                />
+              </Field>
+            )}
+          </form.Field>
+
+          <form.Field name="accountNumber" validators={{ onChange: accountNumberSchema.or(z.literal("")) }}>
+            {(field) => (
+              <Field
+                label="Account number"
+                htmlFor="bank-account-number"
+                hint={bank ? "Optional. Leave empty to clear the account number." : "Optional. Up to 64 characters."}
+                error={firstError(field.state.meta.errors)}
+                className="sm:col-span-2"
+              >
+                <Input
+                  id="bank-account-number"
+                  type="text"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  aria-invalid={field.state.meta.errors.length > 0}
                   value={field.state.value}
                   onBlur={field.handleBlur}
                   onChange={(event) => field.handleChange(event.target.value)}
@@ -232,29 +292,37 @@ function CreateBankDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
             )}
           </form.Field>
 
-          <form.Field name="openingBalance" validators={{ onChange: z.string().regex(/^\d*$/, "Whole taka only") }}>
-            {(field) => (
-              <Field label="Opening balance (৳)" htmlFor="bank-opening" error={firstError(field.state.meta.errors)} hint="Defaults to ৳0.">
-                <Input
-                  id="bank-opening"
-                  inputMode="numeric"
-                  placeholder="0"
-                  value={field.state.value}
-                  onBlur={field.handleBlur}
-                  onChange={(event) => field.handleChange(event.target.value)}
-                />
-              </Field>
-            )}
-          </form.Field>
+          {bank ? (
+            <div className="flex flex-col gap-1.5">
+              <p className="text-sm font-medium">Opening balance</p>
+              <p className="text-sm text-muted-foreground">{formatTaka(bank.openingBalance)} · Unchanged</p>
+            </div>
+          ) : (
+            <form.Field name="openingBalance" validators={{ onChange: z.string().regex(/^\d*$/, "Whole taka only") }}>
+              {(field) => (
+                <Field label="Opening balance (৳)" htmlFor="bank-opening" error={firstError(field.state.meta.errors)} hint="Defaults to ৳0.">
+                  <Input
+                    id="bank-opening"
+                    inputMode="numeric"
+                    placeholder="0"
+                    aria-invalid={field.state.meta.errors.length > 0}
+                    value={field.state.value}
+                    onBlur={field.handleBlur}
+                    onChange={(event) => field.handleChange(event.target.value)}
+                  />
+                </Field>
+              )}
+            </form.Field>
+          )}
 
           <DialogFooter className="sm:col-span-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
             <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
               {([canSubmit, isSubmitting]) => (
                 <Button type="submit" disabled={!canSubmit || isSubmitting}>
-                  {isSubmitting ? "Adding…" : "Add account"}
+                  {isSubmitting ? (bank ? "Saving…" : "Adding…") : (bank ? "Save changes" : "Add account")}
                 </Button>
               )}
             </form.Subscribe>

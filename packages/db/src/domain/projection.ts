@@ -20,6 +20,13 @@ export interface MonthCell {
   status: MonthCellStatus;
 }
 
+export function displayMonthStatus(cell: MonthCell | undefined, currentMonth: Month): MonthCellStatus | "upcoming" | "partial-advance" {
+  if (!cell) return "not-billed";
+  if (cell.month <= currentMonth || cell.bill === 0) return cell.status;
+  if (cell.applied >= cell.bill) return "advance";
+  return cell.applied > 0 ? "partial-advance" : "upcoming";
+}
+
 export function projectMonths(
   facts: MemberBillingFacts,
   entries: MemberEntry[],
@@ -68,18 +75,16 @@ export function projectMonths(
   // Debt from before `from` rolls into the first visible month so the range
   // never looks cleaner than the Due it derives from.
   let rolledUnpaid = 0;
-  let rolledPaid = 0;
   const cells: MonthCell[] = [];
   for (let i = 0; i < months.length; i++) {
     const month = months[i]!;
     if (compareMonths(month, from) < 0) {
       rolledUnpaid += remaining[i]!;
-      rolledPaid += paid[i]!;
       continue;
     }
     const first = cells.length === 0;
     const bill = bills[i]! + (first ? rolledUnpaid : 0);
-    const applied = Math.min(bill, paid[i]! + (first ? rolledPaid : 0));
+    const applied = paid[i]!;
     const contribution = byMonth.get(month)?.contribution ?? 0;
 
     let status: MonthCellStatus;

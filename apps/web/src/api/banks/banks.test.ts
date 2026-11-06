@@ -46,6 +46,71 @@ describe("bank accounts", () => {
     expect(listed.data[0]?.bankName).toBe("DBBL");
   });
 
+  test("creates and lists an account number with leading zeros intact and outer whitespace trimmed", async () => {
+    const bank = await createBank(
+      { db, session: editor },
+      { bankName: "DBBL", accountNumber: "  001234567890  ", openingBalance: 25000 },
+    );
+    expect(bank).toMatchObject({ accountNumber: "001234567890", openingBalance: 25000 });
+    const listed = await listBanks({ db, session: editor }, {});
+    expect(listed.data).toEqual([
+      expect.objectContaining({ id: bank.id, accountNumber: "001234567890", currentBalance: 25000 }),
+    ]);
+  });
+
+  test("adds, updates, omits and clears an account number without changing Opening Balance", async () => {
+    const bank = await createBank({ db, session: editor }, { bankName: "City Bank", openingBalance: 5000 });
+    expect(bank).toMatchObject({ accountNumber: null });
+    expect((await listBanks({ db, session: editor }, {})).data[0]).toMatchObject({ accountNumber: null });
+
+    const added = await updateBank({ db, session: editor }, bank.id, { accountNumber: "00123" });
+    expect(added).toMatchObject({ accountNumber: "00123", openingBalance: 5000 });
+
+    const updated = await updateBank({ db, session: admin }, bank.id, {
+      bankName: "City Bank PT", accountNumber: "  000456  ", address: "Gulshan",
+    });
+    expect(updated).toMatchObject({ bankName: "City Bank PT", accountNumber: "000456", address: "Gulshan", openingBalance: 5000 });
+    expect((await listBanks({ db, session: editor }, {})).data[0]).toMatchObject({ accountNumber: "000456", currentBalance: 5000 });
+
+    const omitted = await updateBank({ db, session: editor }, bank.id, { address: "Banani" });
+    expect(omitted).toMatchObject({ accountNumber: "000456", address: "Banani", openingBalance: 5000 });
+
+    const cleared = await updateBank({ db, session: editor }, bank.id, { accountNumber: null });
+    expect(cleared).toMatchObject({ accountNumber: null, openingBalance: 5000 });
+    expect((await listBanks({ db, session: editor }, {})).data[0]).toMatchObject({ accountNumber: null, currentBalance: 5000 });
+  });
+
+  test("accepts account numbers at the 1 and 64 character boundaries", async () => {
+    const bank = await createBank({ db, session: editor }, { bankName: "Boundary", accountNumber: "0" });
+    expect(bank).toMatchObject({ accountNumber: "0" });
+    const number = `00${"A".repeat(62)}`;
+    const created = await createBank({ db, session: editor }, { bankName: "Boundary", accountNumber: ` ${number} ` });
+    expect(created).toMatchObject({ accountNumber: number });
+    const updated = await updateBank({ db, session: editor }, bank.id, { accountNumber: ` ${number} ` });
+    expect(updated).toMatchObject({ accountNumber: number });
+  });
+
+  test.each([
+    ["numeric", 12345],
+    ["boolean", true],
+    ["array", ["00123"]],
+    ["object", { number: "00123" }],
+    ["empty", ""],
+    ["whitespace-only", " \t\n "],
+    ["over 64 characters", "0".repeat(65)],
+  ])("rejects %s account numbers on create and update with 422", async (_label, accountNumber) => {
+    await expect(createBank({ db, session: editor }, { bankName: "Invalid", accountNumber })).rejects.toMatchObject({ status: 422 });
+    expect((await listBanks({ db, session: editor }, {})).meta.total).toBe(0);
+
+    const bank = await createBank({ db, session: editor }, { bankName: "Valid", accountNumber: "00123", openingBalance: 5000 });
+    await expect(updateBank({ db, session: editor }, bank.id, { bankName: "Invalid", accountNumber })).rejects.toMatchObject({ status: 422 });
+    expect((await listBanks({ db, session: editor }, {})).data[0]).toMatchObject({ bankName: "Valid", accountNumber: "00123", openingBalance: 5000 });
+  });
+
+  test("rejects a null account number on create with 422 (omit it instead)", async () => {
+    await expect(createBank({ db, session: editor }, { bankName: "Invalid", accountNumber: null })).rejects.toMatchObject({ status: 422 });
+  });
+
   test("Current Balance equals the Opening Balance while the ledger is empty", async () => {
     await createBank({ db, session: editor }, { bankName: "BRAC Bank", openingBalance: 10000 });
     const listed = await listBanks({ db, session: editor }, {});
