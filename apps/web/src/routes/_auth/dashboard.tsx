@@ -12,6 +12,7 @@ import {
 import { useState } from "react";
 
 import { formatTaka } from "@DreamDev/db/domain/money";
+import { monthOfDate } from "@DreamDev/db/domain/month";
 import { Button, buttonVariants } from "@DreamDev/ui/components/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@DreamDev/ui/components/card";
 import { Progress } from "@DreamDev/ui/components/progress";
@@ -25,7 +26,7 @@ import { PageHeader } from "@/components/page-header";
 import { StatCard } from "@/components/stat-card";
 import { TransactionIcon, TYPE_LABELS } from "@/components/transaction-icon";
 import { api } from "@/lib/api";
-import { formatDay, todayLong } from "@/lib/format";
+import { formatDay, formatMonth, todayLong } from "@/lib/format";
 
 const MEMBERS_SEARCH = { page: 1, pageSize: 10, sort: "createdAt", order: "desc" } as const;
 const TRANSACTIONS_SEARCH = { page: 1, pageSize: 20, order: "desc" } as const;
@@ -63,6 +64,7 @@ function DashboardPage() {
 
   const data = dashboardQuery.data;
   const { kpis } = data;
+  const currentMonth = monthOfDate(new Date());
   const totalHoldings = kpis.bankBalances.reduce((sum, bank) => sum + bank.currentBalance, 0);
   const collectionRate = kpis.thisMonthBilled > 0 ? Math.round((kpis.thisMonthCollected / kpis.thisMonthBilled) * 100) : null;
 
@@ -198,7 +200,10 @@ function DashboardPage() {
       <Card>
         <CardHeader>
           <CardTitle>Billing grid</CardTitle>
-          <CardDescription>Monthly standing per member for {data.gridYear}. Hover or focus a cell for its bill and applied amount.</CardDescription>
+          <CardDescription>
+            Monthly standing per member for {data.gridYear}. Months after {formatMonth(currentMonth)} are upcoming — projected at today&rsquo;s shares
+            and price. Hover or focus a cell for its bill and applied amount.
+          </CardDescription>
           <CardAction>
             <div className="flex items-center gap-1.5">
               <Button variant="outline" size="icon-sm" aria-label="Previous year" onClick={() => navigate({ search: (prev) => ({ ...prev, year: data.gridYear - 1 }) })}>
@@ -239,9 +244,10 @@ function DashboardPage() {
                       {MONTH_LABELS.map((_, index) => {
                         const month = `${data.gridYear}-${String(index + 1).padStart(2, "0")}`;
                         const cell = row.cells.find((entry) => entry.month === month);
+                        const upcoming = month > currentMonth;
                         const label = cell
-                          ? `${row.name}, ${MONTH_LABELS[index]} ${data.gridYear}: ${cell.status}, bill ${formatTaka(cell.bill)}, applied ${formatTaka(cell.applied)}`
-                          : `${row.name}, ${MONTH_LABELS[index]} ${data.gridYear}: not billed`;
+                          ? `${row.name}, ${MONTH_LABELS[index]} ${data.gridYear}${upcoming ? " (upcoming projection)" : ""}: ${cell.status}, bill ${formatTaka(cell.bill)}, applied ${formatTaka(cell.applied)}`
+                          : `${row.name}, ${MONTH_LABELS[index]} ${data.gridYear}${upcoming ? " (upcoming projection)" : ""}: not billed`;
                         return (
                           <td key={month} className="px-1 py-1.5 text-center">
                             <span
@@ -252,6 +258,7 @@ function DashboardPage() {
                               className={cn(
                                 "mx-auto block size-6 rounded-md outline-none ring-offset-2 ring-offset-card transition-[box-shadow,background-color] duration-150 hover:ring-2 hover:ring-ring/40 focus-visible:ring-2 focus-visible:ring-ring",
                                 cellColor(cell?.status),
+                                upcoming && "opacity-45 outline-dashed outline-1 -outline-offset-1 outline-foreground/30",
                               )}
                             />
                           </td>
@@ -279,6 +286,7 @@ function DashboardPage() {
                 ["Partial", "bg-warning"],
                 ["Due", "bg-destructive"],
                 ["Not billed", "bg-muted-foreground/20"],
+                ["Upcoming", "outline-dashed outline-1 outline-foreground/30"],
               ] as const
             ).map(([label, className]) => (
               <span key={label} className="flex items-center gap-1.5">

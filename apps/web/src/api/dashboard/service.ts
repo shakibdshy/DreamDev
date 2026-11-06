@@ -116,8 +116,9 @@ export async function dashboard(deps: DashboardDeps, year?: number): Promise<Das
     if (seriesMap.has(month)) seriesMap.set(month, (seriesMap.get(month) ?? 0) + contribution.amount);
   }
 
-  // Member × month grid for the chosen year, capped at the current month
-  const gridThrough = gridYear < Number(through.slice(0, 4)) ? `${gridYear}-12` : through;
+  // Member × month grid for the chosen year, including upcoming months so an
+  // Advance shows as covering them (projected at today's shares and price)
+  const gridThrough = `${gridYear}-12`;
   const grid = dues.map(({ memberId, name }) => {
     const member = members.find((m) => m.id === memberId)!;
     const facts = memberFacts(

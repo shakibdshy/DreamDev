@@ -1,6 +1,7 @@
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
-import { compareMonths, monthOfDate } from "@DreamDev/db/domain/month";
+import { compareMonths, monthOfDate, addMonths } from "@DreamDev/db/domain/month";
+import { billForMonth } from "@DreamDev/db/domain/billing";
 import { projectMonths, type MonthCell } from "@DreamDev/db/domain/projection";
 import { dueSummary, type DueSummary } from "@DreamDev/db/domain/due";
 
@@ -169,9 +170,17 @@ export async function getMember(deps: MembersDeps, id: string, year?: number) {
   const summary: DueSummary = dueSummary(facts, entries, through);
 
   const timelineYear = year ?? new Date().getFullYear();
-  // Never show future months as due — cap at the current month
-  const timelineThrough = timelineYear < Number(through.slice(0, 4)) ? `${timelineYear}-12` : through;
+  // Project the whole year — months after the current one render as upcoming,
+  // with the Advance visibly paying them at today's shares and price.
+  const timelineThrough = `${timelineYear}-12`;
   const timeline: MonthCell[] = projectMonths(facts, entries, `${timelineYear}-01`, timelineThrough);
+
+  // How far the Advance stretches: whole months of the current bill it covers.
+  const monthlyBill = billForMonth(facts, through);
+  const advanceCoverage =
+    summary.advance > 0 && monthlyBill > 0
+      ? { months: Math.floor(summary.advance / monthlyBill), monthlyBill, lastCoveredMonth: addMonths(through, Math.floor(summary.advance / monthlyBill)) }
+      : null;
 
   return {
     member: {
@@ -188,6 +197,7 @@ export async function getMember(deps: MembersDeps, id: string, year?: number) {
     },
     shares: allotmentsRaw.map((a) => ({ quantity: a.quantity, effectiveMonth: a.effectiveMonth })),
     summary,
+    advanceCoverage,
     timelineYear,
     timeline,
   };

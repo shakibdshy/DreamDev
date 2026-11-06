@@ -3,6 +3,7 @@ import type { Database } from "@DreamDev/db";
 import { z } from "zod";
 
 import { HttpError, parseOr422, requireUser } from "../http";
+import { assertMoneyOutCovers } from "../banks/service";
 
 /** Transfer: money moved between the Team's own Bank Accounts (GLOSSARY.md). */
 
@@ -40,6 +41,7 @@ export async function createTransfer(deps: TransferDeps, body: unknown) {
     deps.db.bankAccount.findFirst({ where: { id: input.toAccountId, deletedAt: null } }),
   ]);
   if (!from || !to) throw new HttpError(404, "Bank Account not found");
+  await assertMoneyOutCovers(deps.db, from, input.amount, "Transfer");
 
   return deps.db.transfer.create({
     data: {
@@ -58,6 +60,11 @@ export async function updateTransfer(deps: TransferDeps, id: string, body: unkno
   const input = parseOr422(updateTransferBodySchema, body);
   const existing = await deps.db.transfer.findUnique({ where: { id } });
   if (!existing || existing.deletedAt) throw new HttpError(404, "Transfer not found");
+  const amount = input.amount ?? existing.amount;
+  // The old transfer returns to the from-account first — only the delta must fit
+  const from = await deps.db.bankAccount.findFirst({ where: { id: existing.fromAccountId, deletedAt: null } });
+  if (!from) throw new HttpError(404, "Bank Account not found");
+  await assertMoneyOutCovers(deps.db, from, amount - existing.amount, "Transfer");
   return deps.db.transfer.update({
     where: { id },
     data: {

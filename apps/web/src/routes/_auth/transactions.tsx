@@ -20,7 +20,7 @@ import { cn } from "@DreamDev/ui/lib/utils";
 
 import { FEED_TYPES, listFeedQuerySchema } from "@/api/transactions/schema";
 import { Amount } from "@/components/amount";
-import { BankSelect } from "@/components/bank-select";
+import { BankSelect, useBankBalance } from "@/components/bank-select";
 import { EmptyState } from "@/components/empty-state";
 import { Field } from "@/components/field";
 import { MemberSelect } from "@/components/member-select";
@@ -534,6 +534,8 @@ function ExpenseForm({ onDone }: { onDone: () => void }) {
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayInDhaka());
   const [note, setNote] = useState("");
+  const available = useBankBalance(bankAccountId);
+  const over = available !== undefined && Number(amount) > available;
   return (
     <form
       className="grid grid-cols-1 gap-4 sm:grid-cols-2"
@@ -547,7 +549,13 @@ function ExpenseForm({ onDone }: { onDone: () => void }) {
         }
       }}
     >
-      <Field label="Bank account" htmlFor="expense-bank" required>
+      <Field
+        label="Bank account"
+        htmlFor="expense-bank"
+        required
+        hint={available !== undefined ? `Available balance ${formatTaka(available)}` : undefined}
+        error={over ? `Exceeds the available balance of ${formatTaka(available ?? 0)}` : undefined}
+      >
         <BankSelect value={bankAccountId} onChange={setBank} id="expense-bank" />
       </Field>
       <Field label="Amount (৳)" htmlFor="expense-amount" required>
@@ -561,7 +569,7 @@ function ExpenseForm({ onDone }: { onDone: () => void }) {
       </Field>
       <p className="text-xs text-muted-foreground sm:col-span-2">Money out of the fund that isn&rsquo;t a loan to a member.</p>
       <DialogFooter className="sm:col-span-2">
-        <Button type="submit" disabled={create.isPending || !bankAccountId || !amount}>
+        <Button type="submit" disabled={create.isPending || !bankAccountId || !amount || over}>
           {create.isPending ? "Recording…" : "Record expense"}
         </Button>
       </DialogFooter>
@@ -575,6 +583,8 @@ function TransferForm({ onDone }: { onDone: () => void }) {
   const [toAccountId, setTo] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayInDhaka());
+  const available = useBankBalance(fromAccountId);
+  const over = available !== undefined && Number(amount) > available;
   return (
     <form
       className="grid grid-cols-1 gap-4 sm:grid-cols-2"
@@ -588,7 +598,13 @@ function TransferForm({ onDone }: { onDone: () => void }) {
         }
       }}
     >
-      <Field label="From account" htmlFor="transfer-from" required>
+      <Field
+        label="From account"
+        htmlFor="transfer-from"
+        required
+        hint={available !== undefined ? `Available balance ${formatTaka(available)}` : undefined}
+        error={over ? `Exceeds the available balance of ${formatTaka(available ?? 0)}` : undefined}
+      >
         <BankSelect value={fromAccountId} onChange={setFrom} id="transfer-from" />
       </Field>
       <Field label="To account" htmlFor="transfer-to" required>
@@ -602,7 +618,7 @@ function TransferForm({ onDone }: { onDone: () => void }) {
       </Field>
       <p className="text-xs text-muted-foreground sm:col-span-2">Moves money between the team&rsquo;s own accounts — total holdings stay the same.</p>
       <DialogFooter className="sm:col-span-2">
-        <Button type="submit" disabled={create.isPending || !fromAccountId || !toAccountId || fromAccountId === toAccountId || !amount}>
+        <Button type="submit" disabled={create.isPending || !fromAccountId || !toAccountId || fromAccountId === toAccountId || !amount || over}>
           {create.isPending ? "Recording…" : "Record transfer"}
         </Button>
       </DialogFooter>
@@ -671,6 +687,17 @@ function DueDisplay({ memberId }: { memberId: string }) {
       {positionQuery.data && (
         <p className="text-xs text-muted-foreground">
           {positionQuery.data.shares} {positionQuery.data.shares === 1 ? "share" : "shares"} × {formatTaka(positionQuery.data.sharePrice)}/month
+        </p>
+      )}
+      {positionQuery.data && positionQuery.data.advance > 0 && (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {(() => {
+            const monthly = positionQuery.data.shares * positionQuery.data.sharePrice;
+            const months = monthly > 0 ? Math.floor(positionQuery.data.advance / monthly) : 0;
+            return months > 0
+              ? `Enough for ${months} upcoming ${months === 1 ? "month" : "months"} — it applies automatically as each month is billed.`
+              : "Applies automatically against upcoming bills.";
+          })()}
         </p>
       )}
     </div>

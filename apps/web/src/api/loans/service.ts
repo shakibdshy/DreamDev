@@ -2,6 +2,7 @@ import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 
 import { HttpError, parseOr422, requireUser } from "../http";
+import { assertMoneyOutCovers } from "../banks/service";
 import { createLoanBodySchema, createRepaymentBodySchema, SOFT_CAP_MULTIPLIER } from "./schema";
 
 export interface LoansDeps {
@@ -65,6 +66,7 @@ export async function createLoan(deps: LoansDeps, body: unknown) {
   ]);
   if (!member || member.deletedAt) throw new HttpError(404, "Member not found");
   if (!bank) throw new HttpError(404, "Bank Account not found");
+  await assertMoneyOutCovers(deps.db, bank, input.amount, "Loan");
 
   const contributed = contributedAgg._sum.amount ?? 0;
   const warning =

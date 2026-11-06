@@ -10,6 +10,15 @@ interface BanksResponse {
   data: (Omit<BankAccountItem, "createdAt"> & { createdAt: string })[];
 }
 
+/** Live Current Balance of one account — undefined until the banks query resolves. */
+export function useBankBalance(bankAccountId: string): number | undefined {
+  const banksQuery = useQuery({
+    queryKey: ["banks"],
+    queryFn: () => api<BanksResponse>("/api/banks"),
+  });
+  return bankAccountId ? banksQuery.data?.data.find((bank) => bank.id === bankAccountId)?.currentBalance : undefined;
+}
+
 /** Reusable Bank Account picker for money forms — shows each account's Current Balance. */
 export function BankSelect({
   value,

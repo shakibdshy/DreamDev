@@ -108,6 +108,17 @@ describe("loans", () => {
     expect((await listFeed({ db, session: editor }, {})).meta.total).toBe(0);
   });
 
+  test("a loan never exceeds the account's available balance", async () => {
+    await expect(
+      createLoan({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 60000, date: `${thisMonth}-10` }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    // Exactly the available balance is allowed
+    const exact = await createLoan({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 50000, date: `${thisMonth}-10` });
+    expect(exact.loan.amount).toBe(50000);
+    expect(exact.warning).toContain("exceeds twice");
+  });
+
   test("requires authentication and live member/bank", async () => {
     await expect(createLoan({ db, session: null }, { memberId, bankAccountId: bankId, amount: 100, date: `${thisMonth}-10` })).rejects.toMatchObject({ status: 401 });
     await expect(

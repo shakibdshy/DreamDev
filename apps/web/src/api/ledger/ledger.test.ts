@@ -53,6 +53,18 @@ describe("expenses", () => {
     expect((await balances())["A"]).toBe(20000);
     expect((await listFeed({ db, session: editor }, { type: "expense" })).meta.total).toBe(0);
   });
+
+  test("never exceeds the account's available balance — on create and on edit", async () => {
+    await expect(
+      createExpense({ db, session: editor }, { bankAccountId: bankB, amount: 6000, date: `${thisMonth}-10` }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const expense = await createExpense({ db, session: editor }, { bankAccountId: bankA, amount: 19000, date: `${thisMonth}-10` });
+    // 19,000 of 20,000 spent — growing the expense past the remaining 1,000 must fail
+    await expect(updateExpense({ db, session: editor }, expense.id, { amount: 21000 })).rejects.toMatchObject({ status: 422 });
+    await updateExpense({ db, session: editor }, expense.id, { amount: 20000 });
+    expect((await balances())["A"]).toBe(0);
+  });
 });
 
 describe("transfers", () => {
@@ -71,6 +83,12 @@ describe("transfers", () => {
   test("requires two different accounts", async () => {
     await expect(
       createTransfer({ db, session: editor }, { fromAccountId: bankA, toAccountId: bankA, amount: 1000, date: `${thisMonth}-10` }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  test("never exceeds the from-account's available balance", async () => {
+    await expect(
+      createTransfer({ db, session: editor }, { fromAccountId: bankB, toAccountId: bankA, amount: 6000, date: `${thisMonth}-10` }),
     ).rejects.toMatchObject({ status: 422 });
   });
 

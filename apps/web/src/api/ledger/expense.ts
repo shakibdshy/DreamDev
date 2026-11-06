@@ -3,6 +3,7 @@ import type { Database } from "@DreamDev/db";
 import { z } from "zod";
 
 import { HttpError, parseOr422, requireUser } from "../http";
+import { assertMoneyOutCovers } from "../banks/service";
 
 /** Expense: money out that isn't a Loan — bank charges, cash withdrawals (GLOSSARY.md). */
 
@@ -38,7 +39,8 @@ async function liveBank(db: Database, id: string) {
 export async function createExpense(deps: ExpenseDeps, body: unknown) {
   const user = requireUser(deps.session);
   const input = parseOr422(createExpenseBodySchema, body);
-  await liveBank(deps.db, input.bankAccountId);
+  const bank = await liveBank(deps.db, input.bankAccountId);
+  await assertMoneyOutCovers(deps.db, bank, input.amount, "Expense");
   return deps.db.expense.create({
     data: { bankAccountId: input.bankAccountId, amount: input.amount, date: new Date(`${input.date}T00:00:00Z`), note: input.note, createdBy: user.id },
   });
@@ -50,6 +52,18 @@ export async function updateExpense(deps: ExpenseDeps, id: string, body: unknown
   const existing = await deps.db.expense.findUnique({ where: { id } });
   if (!existing || existing.deletedAt) throw new HttpError(404, "Expense not found");
   if (input.bankAccountId) await liveBank(deps.db, input.bankAccountId);
+
+  const targetAccountId = input.bankAccountId ?? existing.bankAccountId;
+  const targetAmount = input.amount ?? existing.amount;
+  if (targetAccountId === existing.bankAccountId) {
+    // The old expense returns to the same account first — only the delta must fit
+    const bank = await liveBank(deps.db, targetAccountId);
+    await assertMoneyOutCovers(deps.db, bank, targetAmount - existing.amount, "Expense");
+  } else {
+    const bank = await liveBank(deps.db, targetAccountId);
+    await assertMoneyOutCovers(deps.db, bank, targetAmount, "Expense");
+  }
+
   return deps.db.expense.update({
     where: { id },
     data: {

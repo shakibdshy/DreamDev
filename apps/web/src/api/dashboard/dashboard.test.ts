@@ -99,8 +99,8 @@ describe("dashboard", () => {
     const rahimThisMonth = rahimRow?.cells.find((c) => c.month === thisMonth);
     expect(rahimThisMonth?.status).toBe("partial");
     const karimThisMonth = data.grid.find((g) => g.name === "Karim")?.cells.find((c) => c.month === thisMonth);
-    // Karim covered this month's ৳5,000 plus ৳1,000 toward last month's hole — ahead this month
-    expect(karimThisMonth?.status).toBe("advance");
+    // True FIFO: Karim's ৳6,000 retires last month's ৳5,000 hole first, then ৳1,000 toward this month — partial, not ahead
+    expect(karimThisMonth?.status).toBe("partial");
 
     // Recent: loan, expense, repayments and contributions all present with type labels
     expect(data.recent.length).toBe(5);

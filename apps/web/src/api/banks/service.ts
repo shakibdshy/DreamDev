@@ -1,6 +1,7 @@
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 import { currentBalance, type BankEntryType } from "@DreamDev/db/domain/balance";
+import { formatTaka } from "@DreamDev/db/domain/money";
 
 import { HttpError, parseOr422, requireUser } from "../http";
 import { createBankBodySchema, listBanksQuerySchema, updateBankBodySchema } from "./schema";
@@ -69,6 +70,35 @@ export async function ledgerDeltasByAccount(db: Database, accountIds: string[]):
     balances.set(accountId, currentBalance(0, entries));
   }
   return balances;
+}
+
+/** One account's live Current Balance (GLOSSARY.md) — the guard for money-out entries. */
+export async function currentBalanceOf(
+  db: Database,
+  account: { id: string; bankName: string; openingBalance: number },
+): Promise<number> {
+  const deltas = await ledgerDeltasByAccount(db, [account.id]);
+  return account.openingBalance + (deltas.get(account.id) ?? 0);
+}
+
+/**
+ * Hard rule for every money-out entry (Loan, Expense, Transfer, and edits that
+ * shrink a Contribution): the amount must fit the account's available balance,
+ * so a ledger entry can never drive a Bank Account negative.
+ */
+export async function assertMoneyOutCovers(
+  db: Database,
+  account: { id: string; bankName: string; openingBalance: number },
+  amount: number,
+  label: string,
+): Promise<void> {
+  const balance = await currentBalanceOf(db, account);
+  if (amount > balance) {
+    throw new HttpError(
+      422,
+      `${label} of ${formatTaka(amount)} exceeds ${account.bankName}'s available balance of ${formatTaka(balance)}`,
+    );
+  }
 }
 
 /** Paginated list of live accounts with computed Current Balances. */

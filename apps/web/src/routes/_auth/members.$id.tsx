@@ -17,7 +17,7 @@ import { useRef, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 
 import { formatTaka } from "@DreamDev/db/domain/money";
-import { todayInDhaka } from "@DreamDev/db/domain/month";
+import { addMonths, todayInDhaka } from "@DreamDev/db/domain/month";
 import { Avatar, AvatarFallback, AvatarImage } from "@DreamDev/ui/components/avatar";
 import { Badge } from "@DreamDev/ui/components/badge";
 import { Button } from "@DreamDev/ui/components/button";
@@ -30,7 +30,7 @@ import { cn } from "@DreamDev/ui/lib/utils";
 import { Progress } from "@DreamDev/ui/components/progress";
 
 import { Amount } from "@/components/amount";
-import { BankSelect } from "@/components/bank-select";
+import { BankSelect, useBankBalance } from "@/components/bank-select";
 import { EmptyState } from "@/components/empty-state";
 import { Field } from "@/components/field";
 import { StatusBadge } from "@/components/status-badge";
@@ -52,6 +52,7 @@ interface MemberDetail {
   };
   shares: { quantity: number; effectiveMonth: string }[];
   summary: { billed: number; contributed: number; adjusted: number; due: number; advance: number };
+  advanceCoverage: { months: number; monthlyBill: number; lastCoveredMonth: string } | null;
   timelineYear: number;
   timeline: { month: string; bill: number; applied: number; status: string }[];
 }
@@ -147,8 +148,9 @@ function MemberDetailPage() {
     );
   }
 
-  const { member, shares, summary, timeline, timelineYear } = detailQuery.data;
+  const { member, shares, summary, advanceCoverage, timeline, timelineYear } = detailQuery.data;
   const currentShares = shares[shares.length - 1]?.quantity ?? 0;
+  const currentMonth = todayInDhaka().slice(0, 7);
   const covered = summary.contributed + summary.adjusted;
   const coverage = summary.billed > 0 ? Math.min(100, Math.round((covered / summary.billed) * 100)) : 0;
   const position = summary.advance > 0 ? "advance" : summary.due > 0 ? "due" : "settled";
@@ -271,6 +273,16 @@ function MemberDetailPage() {
               >
                 {position === "settled" ? "Settled" : formatTaka(position === "due" ? summary.due : summary.advance)}
               </p>
+              {position === "advance" && advanceCoverage && (
+                <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                  <span className="font-medium text-success">
+                    Covers {formatMonth(addMonths(currentMonth, 1))}
+                    {advanceCoverage.months > 1 ? ` – ${formatMonth(advanceCoverage.lastCoveredMonth)}` : ""}
+                  </span>{" "}
+                  ({advanceCoverage.months} {advanceCoverage.months === 1 ? "month" : "months"} at {formatTaka(advanceCoverage.monthlyBill)}). Applied
+                  automatically as each month is billed.
+                </p>
+              )}
             </div>
             <div>
               <div className="flex items-center justify-between text-xs text-muted-foreground">
@@ -375,7 +387,8 @@ function MemberDetailPage() {
         <CardHeader>
           <CardTitle>Billing timeline</CardTitle>
           <CardDescription>
-            {timelineYear} — each month&rsquo;s bill and the amount applied against it, by FIFO walk (ADR-0001).
+            {timelineYear} — each month&rsquo;s bill with payments applied oldest-first (FIFO, ADR-0001). Months after{" "}
+            {formatMonth(currentMonth)} are upcoming, projected at today&rsquo;s shares and price.
           </CardDescription>
           <CardAction>
             <div className="flex items-center gap-1.5">
@@ -395,8 +408,16 @@ function MemberDetailPage() {
               const month = `${timelineYear}-${String(index + 1).padStart(2, "0")}`;
               const cell = timeline.find((entry) => entry.month === month);
               const status = cell?.status ?? "not-billed";
+              const upcoming = month > currentMonth;
+              const spoken = cell
+                ? `${status.replaceAll("-", " ")}, bill ${formatTaka(cell.bill)}, applied ${formatTaka(cell.applied)}`
+                : "not billed";
               return (
-                <div key={month} className={cn("flex flex-col gap-2 rounded-lg border p-3", cellTone(status))}>
+                <div
+                  key={month}
+                  aria-label={`${MONTH_LABELS[index]} ${timelineYear}${upcoming ? ", upcoming projection" : ""}: ${spoken}`}
+                  className={cn("flex flex-col gap-2 rounded-lg border p-3", cellTone(status), upcoming && "border-dashed")}
+                >
                   <div className="flex items-center justify-between gap-2">
                     <p className="text-xs font-medium text-muted-foreground">{MONTH_LABELS[index]}</p>
                     <StatusBadge status={status} />
@@ -734,6 +755,8 @@ function NewLoanDialog({
   const [date, setDate] = useState(todayInDhaka());
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
+  const available = useBankBalance(bankAccountId);
+  const over = available !== undefined && Number(amount) > available;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -771,18 +794,25 @@ function NewLoanDialog({
           <Field label="Date" htmlFor="loan-date" required>
             <Input id="loan-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
           </Field>
-          <Field label="Bank account" htmlFor="loan-bank" required className="sm:col-span-2">
+          <Field
+            label="Bank account"
+            htmlFor="loan-bank"
+            required
+            className="sm:col-span-2"
+            hint={available !== undefined ? `Available balance ${formatTaka(available)}` : undefined}
+            error={over ? `Exceeds the available balance of ${formatTaka(available ?? 0)}` : undefined}
+          >
             <BankSelect id="loan-bank" value={bankAccountId} onChange={setBankAccountId} />
           </Field>
           <Field label="Note" htmlFor="loan-note" hint="Optional" className="sm:col-span-2">
             <Input id="loan-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Purpose of the loan" />
           </Field>
-          <p className="text-xs text-muted-foreground sm:col-span-2">Loans over twice the member&rsquo;s total contributions warn, but still record.</p>
+          <p className="text-xs text-muted-foreground sm:col-span-2">Loans over twice the member&rsquo;s total contributions warn, but still record. A loan can never exceed the account&rsquo;s available balance.</p>
           <DialogFooter className="sm:col-span-2">
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving || !amount || !bankAccountId}>
+            <Button type="submit" disabled={saving || !amount || !bankAccountId || over}>
               {saving ? "Recording…" : "Give loan"}
             </Button>
           </DialogFooter>

@@ -51,9 +51,9 @@ export async function seedIfEmpty(db: Database): Promise<{ seeded: boolean; summ
   });
 
   // Status lifecycle: Jahid inactive for the last 2 months; Nayeem exited 3 months ago
-  await db.memberStatusChange.create({ data: { memberId: memberIds["Demo Jahid"], status: "inactive", date: DAY(months[6]!, 1), createdBy: "seed" } });
+  await db.memberStatusChange.create({ data: { memberId: memberIds["Demo Jahid"]!, status: "inactive", date: DAY(months[6]!, 1), createdBy: "seed" } });
   await db.member.update({ where: { id: memberIds["Demo Jahid"] }, data: { status: "inactive" } });
-  await db.memberStatusChange.create({ data: { memberId: memberIds["Demo Nayeem"], status: "exited", date: DAY(months[5]!, 15), createdBy: "seed" } });
+  await db.memberStatusChange.create({ data: { memberId: memberIds["Demo Nayeem"]!, status: "exited", date: DAY(months[5]!, 15), createdBy: "seed" } });
   await db.member.update({ where: { id: memberIds["Demo Nayeem"] }, data: { status: "exited", exitDate: DAY(months[5]!, 15) } });
 
   const contributionRows: { memberId: string; bankAccountId: string; amount: number; creditDate: Date; sharePriceAtEntry: number; shareQtyAtEntry: number; createdBy: string }[] = [];

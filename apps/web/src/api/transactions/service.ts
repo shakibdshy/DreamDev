@@ -2,6 +2,7 @@ import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 
 import { HttpError, parseOr422, requireUser } from "../http";
+import { assertMoneyOutCovers } from "../banks/service";
 import { getPriceEntries, memberFacts, toMemberEntries } from "../members/billing-facts";
 import { dueSummary } from "@DreamDev/db/domain/due";
 import { monthOfDate } from "@DreamDev/db/domain/month";
@@ -242,6 +243,21 @@ export async function updateContribution(deps: TxnDeps, id: string, body: unknow
   if (input.bankAccountId) {
     const bank = await deps.db.bankAccount.findFirst({ where: { id: input.bankAccountId, deletedAt: null } });
     if (!bank) throw new HttpError(404, "Bank Account not found");
+  }
+
+  // Shrinking or moving a Contribution takes money out of the old account —
+  // the same balance rule as any other money-out edit.
+  const nextBankId = input.bankAccountId ?? existing.bankAccountId;
+  const nextAmount = input.amount ?? existing.amount;
+  if (nextBankId === existing.bankAccountId) {
+    if (nextAmount < existing.amount) {
+      const bank = await deps.db.bankAccount.findFirst({ where: { id: existing.bankAccountId, deletedAt: null } });
+      if (!bank) throw new HttpError(404, "Bank Account not found");
+      await assertMoneyOutCovers(deps.db, bank, existing.amount - nextAmount, "Contribution reduction");
+    }
+  } else {
+    const oldBank = await deps.db.bankAccount.findFirst({ where: { id: existing.bankAccountId, deletedAt: null } });
+    if (oldBank) await assertMoneyOutCovers(deps.db, oldBank, existing.amount, "Contribution move");
   }
 
   return deps.db.contribution.update({

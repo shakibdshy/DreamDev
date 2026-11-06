@@ -75,6 +75,17 @@ describe("contributions", () => {
     expect((await memberPosition({ db, session: editor }, memberId)).due).toBe(5000);
   });
 
+  test("shrinking or moving a Contribution never overdraws the old account", async () => {
+    const created = await createContribution(
+      { db, session: editor },
+      { memberId, bankAccountId: bankId2, amount: 3000, creditDate: `${thisMonth}-01` },
+    );
+    // BRAC holds 0 + 3,000 − 2,500 = 500; taking more than that out must fail
+    await db.expense.create({ data: { bankAccountId: bankId2, amount: 2500, date: new Date(`${thisMonth}-02T00:00:00Z`) } });
+    await expect(updateContribution({ db, session: editor }, created.id, { amount: 1000 })).rejects.toMatchObject({ status: 422 });
+    await expect(updateContribution({ db, session: editor }, created.id, { bankAccountId: bankId })).rejects.toMatchObject({ status: 422 });
+  });
+
   test("validates member, bank, amount and auth", async () => {
     await expect(
       createContribution({ db, session: null }, { memberId, bankAccountId: bankId, amount: 5000, creditDate: `${thisMonth}-10` }),
