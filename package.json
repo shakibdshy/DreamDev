@@ -42,15 +42,31 @@
     "auth:generate": "cd apps/web && bun run auth:generate"
   },
   "dependencies": {
+    "@prisma/composer": "0.34.0",
+    "@prisma/composer-prisma-cloud": "0.34.0",
+    "@prisma/orm-postgres": "8.0.0-rc.20",
+    "effect": "4.0.3",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@DreamDev/config": "workspace:*",
     "@types/node": "^26.4.1",
+    "prisma": "8.0.0-rc.27",
     "tsx": "^4.23.13",
     "turbo": "^2.11.7",
     "typescript": "catalog:",
     "varlock": "catalog:"
   },
-  "packageManager": "bun@1.4.3"
+  "packageManager": "bun@1.4.3",
+  "overrides": {
+    "@effect/platform-bun": "4.0.3",
+    "@effect/platform-node": "4.0.3",
+    "@effect/platform-node-shared": "4.0.3",
+    "@effect/sql-d1": "4.0.3",
+    "@effect/sql-mysql2": "4.0.3",
+    "@effect/sql-pg": "4.0.3",
+    "@effect/sql-sqlite-do": "4.0.3",
+    "@effect/vitest": "4.0.3",
+    "effect": "4.0.3"
+  }
 }

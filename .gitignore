@@ -57,3 +57,5 @@ coverage
 tmp
 temp
 .playwright-mcp/
+.prisma-composer/
+.alchemy/
