@@ -297,3 +297,23 @@ model AgentPausedApproval {
 
   @@map("agent_paused_approval")
 }
+
+// Delivery log for member Telegram notifications (#14): one row per event,
+// deduped per (record, event, member); failed sends retry on the member's
+// next touching write using the stored content.
+model NotificationLog {
+  id                String    @id @default(uuid())
+  memberId          String
+  type              String // contribution_recorded | contribution_updated | contribution_deleted | loan_recorded | loan_deleted | repayment_recorded | adjustment_recorded | adjustment_updated | adjustment_deleted | shares_changed | status_changed
+  recordId          String
+  status            String // sent | failed | skipped-no-chat | disabled
+  content           String
+  telegramMessageId Int?
+  error             String?
+  retriedAt         DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@unique([recordId, type, memberId])
+  @@index([memberId, status])
+  @@map("notification_log")
+}

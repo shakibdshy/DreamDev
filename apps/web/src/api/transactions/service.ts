@@ -7,6 +7,7 @@ import { getPriceEntries, memberFacts, toMemberEntries } from "../members/billin
 import { dueSummary } from "@DreamDev/db/domain/due";
 import { monthOfDate } from "@DreamDev/db/domain/month";
 import { createContributionBodySchema, listFeedQuerySchema, updateContributionBodySchema } from "./schema";
+import { notifyMemberEvent } from "@/telegram/notify";
 
 export interface TxnDeps {
   db: Database;
@@ -218,7 +219,7 @@ export async function createContribution(deps: TxnDeps, body: unknown) {
   const sharePrice = prices[prices.length - 1]?.price ?? 5000;
   const shareQty = allotments[allotments.length - 1]?.quantity ?? 0;
 
-  return deps.db.contribution.create({
+  const contribution = await deps.db.contribution.create({
     data: {
       memberId: input.memberId,
       bankAccountId: input.bankAccountId,
@@ -230,6 +231,9 @@ export async function createContribution(deps: TxnDeps, body: unknown) {
       createdBy: user.id,
     },
   });
+  // Member DM (dashboard AND agent writes) — awaited but never failing the write.
+  await notifyMemberEvent({ db: deps.db }, { memberId: input.memberId, type: "contribution_recorded", recordId: contribution.id });
+  return contribution;
 }
 
 /** Edits a Contribution. The price/quantity snapshot is history and never changes. */
@@ -260,7 +264,7 @@ export async function updateContribution(deps: TxnDeps, id: string, body: unknow
     if (oldBank) await assertMoneyOutCovers(deps.db, oldBank, existing.amount, "Contribution move");
   }
 
-  return deps.db.contribution.update({
+  const updated = await deps.db.contribution.update({
     where: { id },
     data: {
       ...(input.bankAccountId !== undefined ? { bankAccountId: input.bankAccountId } : {}),
@@ -270,6 +274,8 @@ export async function updateContribution(deps: TxnDeps, id: string, body: unknow
       updatedBy: user.id,
     },
   });
+  await notifyMemberEvent({ db: deps.db }, { memberId: existing.memberId, type: "contribution_updated", recordId: id });
+  return updated;
 }
 
 /** Soft-deletes a Contribution — its balance and Due effects vanish with it. */
@@ -278,5 +284,6 @@ export async function softDeleteContribution(deps: TxnDeps, id: string) {
   const existing = await deps.db.contribution.findUnique({ where: { id } });
   if (!existing || existing.deletedAt) throw new HttpError(404, "Contribution not found");
   await deps.db.contribution.update({ where: { id }, data: { deletedAt: new Date() } });
+  await notifyMemberEvent({ db: deps.db }, { memberId: existing.memberId, type: "contribution_deleted", recordId: id });
   return { ok: true };
 }

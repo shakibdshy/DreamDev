@@ -526,3 +526,160 @@ describe("telegram agent chat (ticket 6/8)", () => {
     expect(sent.filter((t) => String(t.text).includes("notification-only")).length).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ticket 7/8: member notifications
+// ---------------------------------------------------------------------------
+
+import { notifyMemberEvent, setActiveTelegramClient } from "./notify";
+import { createContribution, softDeleteContribution } from "@/api/transactions/service";
+
+describe("member notifications (ticket 7/8)", () => {
+  async function seed() {
+    const member = await db.member.create({ data: { name: "Notif Member", mobile: "01412345678", joiningDate: new Date("2026-01-01") } });
+    await db.shareAllotment.create({ data: { memberId: member.id, quantity: 2, effectiveMonth: "2026-01" } });
+    const bank = await db.bankAccount.create({ data: { bankName: "Notif Bank", openingBalance: 50_000 } });
+    return { member, bank };
+  }
+
+  const clientWith = (chatId: string | null, fail = false) => {
+    const sent: { chatId: string; text: string }[] = [];
+    const client: TelegramClient = {
+      async sendMessage(id, text) {
+        sent.push({ chatId: id, text });
+        return fail ? { ok: false, description: "telegram down" } : { ok: true, messageId: 11 };
+      },
+      async answerCallbackQuery() {
+        return { ok: true };
+      },
+      async getMe() {
+        return { ok: true, result: { username: "dreamdev_fund_bot" } };
+      },
+    };
+    void chatId;
+    return { client, sent };
+  };
+
+  test("contribution recorded → templated DM to exactly that member; log row sent", async () => {
+    const { member, bank } = await seed();
+    await db.member.update({ where: { id: member.id }, data: { telegramChatId: "1200" } });
+    const { client, sent } = clientWith("1200");
+
+    const contribution = await db.contribution.create({
+      data: { memberId: member.id, bankAccountId: bank.id, amount: 9_000, creditDate: new Date("2026-11-01"), sharePriceAtEntry: 5000, shareQtyAtEntry: 2 },
+    });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "contribution_recorded", recordId: contribution.id });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.chatId).toBe("1200");
+    expect(sent[0]?.text).toContain("✅ Contribution recorded");
+    expect(sent[0]?.text).toContain("৳9,000");
+    expect(sent[0]?.text).toContain("2026-11-01");
+    expect(sent[0]?.text).toContain("Notif Bank");
+    expect(sent[0]?.text).toContain("Your Due"); // running total where meaningful
+    const log = await db.notificationLog.findFirstOrThrow();
+    expect(log.status).toBe("sent");
+    expect(log.telegramMessageId).toBe(11);
+  });
+
+  test("dedupe: the same record+event never notifies twice", async () => {
+    const { member, bank } = await seed();
+    await db.member.update({ where: { id: member.id }, data: { telegramChatId: "1201" } });
+    const { client, sent } = clientWith("1201");
+    const contribution = await db.contribution.create({
+      data: { memberId: member.id, bankAccountId: bank.id, amount: 1_000, creditDate: new Date("2026-11-01"), sharePriceAtEntry: 5000, shareQtyAtEntry: 2 },
+    });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "contribution_recorded", recordId: contribution.id });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "contribution_recorded", recordId: contribution.id });
+    expect(sent).toHaveLength(1);
+    expect(await db.notificationLog.count()).toBe(1);
+  });
+
+  test("skipped-no-chat and disabled statuses; no-member records send nothing", async () => {
+    const { member, bank } = await seed();
+    const { client, sent } = clientWith("x");
+    const contribution = await db.contribution.create({
+      data: { memberId: member.id, bankAccountId: bank.id, amount: 1_000, creditDate: new Date("2026-11-01"), sharePriceAtEntry: 5000, shareQtyAtEntry: 2 },
+    });
+    // unlinked
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "contribution_recorded", recordId: contribution.id });
+    expect(await db.notificationLog.findFirstOrThrow().then((l) => l.status)).toBe("skipped-no-chat");
+    expect(sent).toHaveLength(0);
+    // toggled off
+    await db.member.update({ where: { id: member.id }, data: { notifyEnabled: false } });
+    const second = await db.contribution.create({
+      data: { memberId: member.id, bankAccountId: bank.id, amount: 2_000, creditDate: new Date("2026-11-02"), sharePriceAtEntry: 5000, shareQtyAtEntry: 2 },
+    });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "contribution_recorded", recordId: second.id });
+    const statuses = await db.notificationLog.findMany({ orderBy: { createdAt: "asc" } });
+    expect(statuses.map((l) => l.status)).toEqual(["skipped-no-chat", "disabled"]);
+    expect(sent).toHaveLength(0);
+    // a transfer (no member) is never even routed — nothing new logged
+    expect(await db.notificationLog.count()).toBe(2);
+  });
+
+  test("send failure never fails the write and retries on the next touching write", async () => {
+    const { member, bank } = await seed();
+    await db.member.update({ where: { id: member.id }, data: { telegramChatId: "1202" } });
+    const failing = clientWith("1202", true);
+    const contribution = await db.contribution.create({
+      data: { memberId: member.id, bankAccountId: bank.id, amount: 3_000, creditDate: new Date("2026-11-01"), sharePriceAtEntry: 5000, shareQtyAtEntry: 2 },
+    });
+    await notifyMemberEvent({ db, client: failing.client }, { memberId: member.id, type: "contribution_recorded", recordId: contribution.id });
+    expect((await db.notificationLog.findFirstOrThrow()).status).toBe("failed");
+
+    // Next touching write: retry succeeds first, then the new event delivers
+    const working = clientWith("1202");
+    const second = await db.contribution.create({
+      data: { memberId: member.id, bankAccountId: bank.id, amount: 4_000, creditDate: new Date("2026-11-02"), sharePriceAtEntry: 5000, shareQtyAtEntry: 2 },
+    });
+    await notifyMemberEvent({ db, client: working.client }, { memberId: member.id, type: "contribution_recorded", recordId: second.id });
+    expect(working.sent).toHaveLength(2); // retry + new
+    const logs = await db.notificationLog.findMany({ orderBy: { createdAt: "asc" } });
+    expect(logs.every((l) => l.status === "sent")).toBe(true);
+    expect(logs.find((l) => l.recordId === contribution.id)?.retriedAt).not.toBeNull();
+  });
+
+  test("service hook: createContribution notifies; agent and dashboard writes are identical seams", async () => {
+    const { member, bank } = await seed();
+    await db.member.update({ where: { id: member.id }, data: { telegramChatId: "1203" } });
+    const { client, sent } = clientWith("1203");
+    setActiveTelegramClient(client);
+
+    await createContribution({ db, session: adminSession }, { memberId: member.id, bankAccountId: bank.id, amount: 5_000, creditDate: "2026-11-03" });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain("৳5,000");
+
+    // soft delete notifies too
+    const contribution = await db.contribution.findFirstOrThrow({ where: { amount: 5_000 } });
+    await softDeleteContribution({ db, session: adminSession }, contribution.id);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]?.text).toContain("🗑️ Contribution removed");
+  });
+
+  test("loan, repayment, adjustment, shares, status events all produce their templates", async () => {
+    const { member, bank } = await seed();
+    await db.member.update({ where: { id: member.id }, data: { telegramChatId: "1204" } });
+    const { client, sent } = clientWith("1204");
+
+    const loan = await db.loan.create({ data: { memberId: member.id, bankAccountId: bank.id, amount: 12_000, date: new Date("2026-10-01") } });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "loan_recorded", recordId: loan.id });
+    const repayment = await db.loanRepayment.create({ data: { loanId: loan.id, memberId: member.id, bankAccountId: bank.id, amount: 4_000, creditDate: new Date("2026-11-01") } });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "repayment_recorded", recordId: repayment.id });
+    const adjustment = await db.adjustment.create({ data: { memberId: member.id, amount: 500, reason: "Opening due" } });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "adjustment_recorded", recordId: adjustment.id });
+    const allotment = await db.shareAllotment.create({ data: { memberId: member.id, quantity: 3, effectiveMonth: "2026-11" } });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "shares_changed", recordId: allotment.id });
+    const change = await db.memberStatusChange.create({ data: { memberId: member.id, status: "inactive", date: new Date("2026-11-01") } });
+    await notifyMemberEvent({ db, client }, { memberId: member.id, type: "status_changed", recordId: change.id });
+
+    const texts = sent.map((s) => s.text);
+    expect(texts[0]).toContain("💸 Loan recorded");
+    expect(texts[1]).toContain("Loan outstanding now: ৳8,000");
+    expect(texts[2]).toContain("⚖️ Adjustment recorded");
+    expect(texts[3]).toContain("📊 Share quantity changed");
+    expect(texts[3]).toContain("Monthly bill now: ৳15,000"); // 3 × ৳5,000
+    expect(texts[4]).toContain("Status: inactive");
+    expect(await db.notificationLog.count()).toBe(5);
+  });
+});
