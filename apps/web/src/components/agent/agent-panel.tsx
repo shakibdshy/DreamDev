@@ -103,11 +103,23 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                       : "max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-sm bg-muted px-3.5 py-2 text-sm"
                   }
                 >
-                  {message.parts.map((part, index) => {
+                  {(() => {
+                    const answered = new Set(
+                      message.parts
+                        .filter((p) => p.type === "tool-result")
+                        .map((p) => (p as { toolCallId?: string }).toolCallId ?? ""),
+                    );
+                    return message.parts.map((part, index) => {
                     if (part.type === "text" && part.content) {
                       return <div key={index} className="space-y-1">{renderMarkdownish(part.content)}</div>;
                     }
                     if (part.type === "tool-call") {
+                      // In-flight only: hide once the call completes OR its
+                      // sibling tool-result exists (state may lag on the wire).
+                      const call = part as { id?: string; state?: string };
+                      const state = call.state ?? "";
+                      const inFlight = ["awaiting-input", "input-streaming", "input-complete"].includes(state);
+                      if (!inFlight || (call.id && answered.has(call.id))) return null;
                       return (
                         <p key={index} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                           <Loader2Icon className="size-3 animate-spin" />
@@ -116,7 +128,8 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                       );
                     }
                     return null;
-                  })}
+                    });
+                  })()}
                 </div>
               </div>
             ))}

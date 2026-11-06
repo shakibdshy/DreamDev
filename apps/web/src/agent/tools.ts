@@ -7,7 +7,7 @@ import { listBanks } from "@/api/banks/service";
 import { createContribution, listFeed, memberPosition } from "@/api/transactions/service";
 
 import { previewContributionDef, recordContributionDef } from "./contribution-tools";
-import { buildWriteTools } from "./write-tools";
+import { buildWriteTools, sanitizeOptionalText } from "./write-tools";
 import { serviceDeps, type AgentContext } from "./context";
 
 /**
@@ -245,7 +245,7 @@ const recordContributionTool = recordContributionDef.server<AgentContext>(async 
   // The executor runs only after the user approves the confirm card. The
   // service re-validates with the same zod schema the dashboard route uses and
   // attributes createdBy from the acting session user.
-  const result = await createContribution(serviceDeps(toolCtx.context), args);
+  const result = await createContribution(serviceDeps(toolCtx.context), sanitizeOptionalText(args, ["note"]));
   const position = await memberPosition(serviceDeps(toolCtx.context), result.memberId);
   return {
     recorded: true,

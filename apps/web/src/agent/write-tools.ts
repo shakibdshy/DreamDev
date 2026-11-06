@@ -59,6 +59,24 @@ export type WriteInput = { entity: WriteEntity; action: WriteAction; id?: string
 const taka = (n: number) => `৳${n.toLocaleString("en-IN")}`;
 const day = (d: Date) => d.toISOString().slice(0, 10);
 
+/**
+ * Models occasionally emit the literal string "null" (or null) for optional
+ * text — strip it before the zod layer so notes stay absent instead of
+ * storing the four characters "null" in the ledger.
+ */
+export function sanitizeOptionalText<T extends Record<string, unknown>>(args: T, keys: ("note" | "reason" | "address" | "accountNumber")[]): T {
+  const cleaned = { ...args };
+  for (const key of keys) {
+    if (key in cleaned) {
+      const value = cleaned[key];
+      if (value === null || (typeof value === "string" && ["null", "none", "undefined", ""].includes(value.trim().toLowerCase()))) {
+        delete cleaned[key];
+      }
+    }
+  }
+  return cleaned;
+}
+
 /** Guard: editors cannot touch admin-only entities/actions even via edited args. */
 function assertRoleAllowed(role: "admin" | "editor", input: WriteInput): void {
   if (role === "admin") return;
@@ -100,6 +118,7 @@ interface WriteDeps {
 export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", input: WriteInput): Promise<{ lines: string[] }> {
   assertRoleAllowed(role, input);
   assertSanity(input);
+  input = { ...input, args: sanitizeOptionalText(input.args, ["note", "reason", "address", "accountNumber"]) };
   const { db, session } = deps;
   const s = { db, session };
   const { entity, action, id, args } = input;
@@ -208,6 +227,7 @@ export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", in
 export async function executeWrite(deps: WriteDeps, role: "admin" | "editor", input: WriteInput): Promise<{ recorded: true }> {
   assertRoleAllowed(role, input);
   assertSanity(input);
+  input = { ...input, args: sanitizeOptionalText(input.args, ["note", "reason", "address", "accountNumber"]) };
   const s = { db: deps.db, session: deps.session };
   const { entity, action, id, args } = input;
   switch (`${entity}:${action}`) {
