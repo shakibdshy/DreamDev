@@ -7,6 +7,7 @@ import { listBanks } from "@/api/banks/service";
 import { createContribution, listFeed, memberPosition } from "@/api/transactions/service";
 
 import { previewContributionDef, recordContributionDef } from "./contribution-tools";
+import { buildWriteTools } from "./write-tools";
 import { serviceDeps, type AgentContext } from "./context";
 
 /**
@@ -255,21 +256,13 @@ const recordContributionTool = recordContributionDef.server<AgentContext>(async 
   };
 });
 
-/** All tools the agent may call: reads for everyone, gated writes. */
-export function agentTools() {
-  return [
-    listMembersTool,
-    memberPositionTool,
-    memberDetailTool,
-    fundOverviewTool,
-    listBanksTool,
-    transactionsFeedTool,
-    previewContributionTool,
-    recordContributionTool,
-  ];
+/** All tools for a role: reads + gated contribution writes + the generic gated surface. */
+export function agentTools(role: "admin" | "editor" = "admin") {
+  const reads = [listMembersTool, memberPositionTool, memberDetailTool, fundOverviewTool, listBanksTool, transactionsFeedTool];
+  return [...reads, previewContributionTool, recordContributionTool, ...buildWriteTools(role)];
 }
 
-/** Kept for the read-only seam tests; equals agentTools() filtered to reads. */
+/** Read-only seam (tests assert no record_ tools exist here). */
 export function readTools() {
-  return agentTools().filter((tool) => !/^record_/.test(tool.name));
+  return agentTools().filter((tool) => /^list_|_position$|_detail$|fund_overview|_feed$|preview_/.test(tool.name));
 }

@@ -8,9 +8,10 @@ import { Button } from "@DreamDev/ui/components/button";
 import { Input } from "@DreamDev/ui/components/input";
 
 import { previewContributionDef, recordContributionDef, type ContributionPreview } from "@/agent/contribution-tools";
+import { previewDeleteDef, previewWriteDef, writeRecordDef, deleteRecordDef } from "@/agent/write-tools-defs";
 import type { ShellUser } from "../app-shell";
 
-type AgentTools = readonly [typeof previewContributionDef, typeof recordContributionDef];
+type AgentTools = readonly [typeof previewContributionDef, typeof recordContributionDef, typeof previewWriteDef, typeof writeRecordDef, typeof previewDeleteDef, typeof deleteRecordDef];
 type AgentChat = UseChatReturn<AgentTools>;
 type AgentUIMessage = AgentChat["messages"][number];
 
@@ -31,7 +32,7 @@ export function AgentPanel({ user }: { user: ShellUser }) {
     connection: fetchServerSentEvents("/api/agent/chat"),
     threadId: `web-${user.email}`,
     initialMessages: history ?? [],
-    tools: [previewContributionDef, recordContributionDef],
+    tools: [previewContributionDef, recordContributionDef, previewWriteDef, writeRecordDef, previewDeleteDef, deleteRecordDef],
   });
 
   // Load the persisted conversation once, when the panel first opens.
@@ -136,7 +137,8 @@ export function AgentPanel({ user }: { user: ShellUser }) {
             ) : null}
 
             {chat.interrupts.map((interrupt) => {
-              if (interrupt.kind !== "tool-approval" || interrupt.toolName !== "record_contribution") return null;
+              if (interrupt.kind !== "tool-approval") return null;
+              if (interrupt.toolName === "record_contribution") {
               // Canonical values from the correlated preview result — the same
               // numbers the service will write, never the model's paraphrase.
               const preview = findLatestPreview(chat.messages as UIMessage<never>[], interrupt.id);
@@ -177,6 +179,37 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                       disabled={!interrupt.canResolve || chat.resuming}
                       onClick={() => interrupt.resolveInterrupt(false)}
                     >
+                      <XIcon className="size-4" />
+                      Reject
+                    </Button>
+                  </div>
+                </div>
+              );
+              }
+              // Generic gated writes/deletes: canonical lines from the correlated preview
+              const isDelete = interrupt.toolName === "delete_record";
+              const lines = findPreviewLines(chat.messages as UIMessage<never>[], interrupt);
+              return (
+                <div key={interrupt.id} className="rounded-xl border border-primary/30 bg-primary/5 p-3">
+                  <p className="flex items-center gap-2 text-sm font-medium">
+                    <CheckIcon className="size-4 text-primary" aria-hidden />
+                    {isDelete ? "Confirm delete" : "Confirm change"}
+                  </p>
+                  {lines ? (
+                    <ul className="mt-2 space-y-1 text-xs">
+                      {lines.map((line, index) => (
+                        <li key={index} className="text-foreground">{line}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">Check the values before approving.</p>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <Button size="sm" className="flex-1" disabled={!interrupt.canResolve || chat.resuming} onClick={() => interrupt.resolveInterrupt(true)}>
+                      {chat.resuming ? <Loader2Icon className="size-4 animate-spin" /> : <CheckIcon className="size-4" />}
+                      {isDelete ? "Delete" : "Approve"}
+                    </Button>
+                    <Button size="sm" variant="outline" className="flex-1" disabled={!interrupt.canResolve || chat.resuming} onClick={() => interrupt.resolveInterrupt(false)}>
                       <XIcon className="size-4" />
                       Reject
                     </Button>
@@ -249,4 +282,57 @@ function safeJson(text: string): unknown {
 
 function cnDue(due: number): string {
   return due > 0 ? "font-medium text-destructive tabular" : "font-medium text-success tabular";
+}
+
+/**
+ * Canonical preview lines for a generic write/delete interrupt: the result of
+ * the preview_write / preview_delete call whose arguments match the paused
+ * call's, falling back to the newest preview result.
+ */
+function findPreviewLines(messages: UIMessage<never>[], interrupt: { toolName: string; originalArgs: unknown }): string[] | null {
+  const previewTool = interrupt.toolName === "delete_record" ? previewDeleteDef.name : previewWriteDef.name;
+  let fallback: string[] | null = null;
+  const argsOf = new Map<string, string>(); // toolCallId → arguments JSON
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type === "tool-call") {
+        const call = part as { type: "tool-call"; id?: string; name?: string; arguments?: string };
+        if (call.id && call.arguments) argsOf.set(call.id, call.arguments);
+      }
+    }
+  }
+  const matches = (callArgs: string | undefined) => {
+    if (!callArgs || typeof interrupt.originalArgs !== "object" || interrupt.originalArgs === null) return true; // fallback: latest
+    try {
+      return stableJson(JSON.parse(callArgs)) === stableJson(interrupt.originalArgs);
+    } catch {
+      return true;
+    }
+  };
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-result") continue;
+      const result = part as { type: "tool-result"; toolCallId?: string; name?: string; content?: unknown };
+      if (result.name !== previewTool || !result.toolCallId) continue;
+      const parsed = parseLines(result.content);
+      if (!parsed) continue;
+      if (matches(argsOf.get(result.toolCallId))) return parsed;
+      fallback = parsed;
+    }
+  }
+  return fallback;
+}
+
+function parseLines(content: unknown): string[] | null {
+  const raw = typeof content === "string" ? safeJson(content) : content;
+  if (!raw || typeof raw !== "object") return null;
+  const source = (raw as { lines?: unknown }).lines ?? (raw as { output?: { lines?: unknown } }).output?.lines;
+  if (!Array.isArray(source)) return null;
+  return source.map(String);
+}
+
+function stableJson(value: unknown): string {
+  if (!value || typeof value !== "object") return JSON.stringify(value ?? null);
+  const sorted = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, stableJson(v)]);
+  return JSON.stringify(sorted);
 }

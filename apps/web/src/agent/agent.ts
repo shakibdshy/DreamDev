@@ -113,7 +113,7 @@ export function agentStream(args: {
     ...(params.parentRunId ? { parentRunId: params.parentRunId } : {}),
     ...(params.resume ? { resume: params.resume } : {}),
     systemPrompts: [systemPrompt(ctx)],
-    tools: agentTools(),
+    tools: agentTools(ctx.session.user.role === "admin" ? "admin" : "editor"),
     context: ctx,
     agentLoopStrategy: maxIterations(8),
     middleware: [auditMiddleware(conversationId, ctx.db)],

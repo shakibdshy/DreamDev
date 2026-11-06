@@ -407,3 +407,162 @@ describe("confirm gate: contribution writes (ticket 4/8)", () => {
     expect(recordContributionDef.needsApproval).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ticket 5/8: full CRUD surface + role scoping
+// ---------------------------------------------------------------------------
+
+import { executeDelete, executeWrite, previewDelete, previewWrite, writeInputSchema } from "./write-tools";
+
+describe("generic write surface (ticket 5/8)", () => {
+  const deps = () => ({ db, session: adminSession });
+
+  test("previewWrite builds canonical lines from DB reads (loan)", async () => {
+    const { member, bank } = await seedFund();
+    const preview = await previewWrite(deps(), "admin", {
+      entity: "loan", action: "create", args: { memberId: member.id, bankAccountId: bank.id, amount: 25_000, date: "2026-11-01" },
+    });
+    expect(preview.lines.join(" ")).toContain("Rahim Uddin");
+    expect(preview.lines.join(" ")).toContain("Dutch-Bangla Bank");
+    expect(preview.lines.join(" ")).toContain("25,000");
+  });
+
+  test("repayment preview shows outstanding and settle state", async () => {
+    const { member, bank } = await seedFund();
+    const loan = await db.loan.create({ data: { memberId: member.id, bankAccountId: bank.id, amount: 30_000, date: new Date("2026-09-01"), createdBy: adminSession.user.id } });
+    const preview = await previewWrite(deps(), "admin", {
+      entity: "loan_repayment", action: "repay", id: loan.id, args: { bankAccountId: bank.id, amount: 30_000, creditDate: "2026-11-01" },
+    });
+    expect(preview.lines.join(" ")).toContain("outstanding ৳30,000");
+    expect(preview.lines.join(" ")).toContain("loan settles");
+  });
+
+  test("loan create through the real service preserves invariants (createdBy)", async () => {
+    const { member, bank } = await seedFund();
+    await executeWrite(deps(), "admin", { entity: "loan", action: "create", args: { memberId: member.id, bankAccountId: bank.id, amount: 25_000, date: "2026-11-01" } });
+    const loan = await db.loan.findFirstOrThrow({ where: { amount: 25_000 } });
+    expect(loan.createdBy).toBe(adminSession.user.id);
+  });
+
+  test("repayment execution respects the outstanding cap (FIFO service intact)", async () => {
+    const { member, bank } = await seedFund();
+    const loan = await db.loan.create({ data: { memberId: member.id, bankAccountId: bank.id, amount: 30_000, date: new Date("2026-09-01") } });
+    await executeWrite(deps(), "admin", { entity: "loan_repayment", action: "repay", id: loan.id, args: { bankAccountId: bank.id, amount: 40_000, creditDate: "2026-11-01" } }).catch(() => "rejected");
+    expect(await db.loanRepayment.count()).toBe(0); // over-cap never writes
+    await executeWrite(deps(), "admin", { entity: "loan_repayment", action: "repay", id: loan.id, args: { bankAccountId: bank.id, amount: 30_000, creditDate: "2026-11-01" } });
+    expect(await db.loanRepayment.count()).toBe(1);
+  });
+
+  test("expense, transfer, adjustment, member status, bank: create + soft delete through dispatchers", async () => {
+    const { member, bank } = await seedFund();
+
+    await executeWrite(deps(), "admin", { entity: "expense", action: "create", args: { bankAccountId: bank.id, amount: 500, date: "2026-11-02", note: "Stationery" } });
+    const expense = await db.expense.findFirstOrThrow();
+    expect(expense.createdBy).toBe(adminSession.user.id);
+    await previewDelete(deps(), "admin", { entity: "expense", id: expense.id }).then((p) => expect(p.lines.join(" ")).toContain("500"));
+    await executeDelete(deps(), "admin", { entity: "expense", id: expense.id });
+    expect((await db.expense.findUnique({ where: { id: expense.id } }))?.deletedAt).not.toBeNull();
+
+    await executeWrite(deps(), "admin", { entity: "transfer", action: "create", args: { fromAccountId: bank.id, toAccountId: (await db.bankAccount.create({ data: { bankName: "City Bank", openingBalance: 0 } })).id, amount: 2_000, date: "2026-11-02" } });
+    const transfer = await db.transfer.findFirstOrThrow();
+    await executeDelete(deps(), "admin", { entity: "transfer", id: transfer.id });
+    expect((await db.transfer.findUnique({ where: { id: transfer.id } }))?.deletedAt).not.toBeNull();
+
+    // Adjustments are admin-only — admin works, editor is refused before any write
+    await executeWrite(deps(), "admin", { entity: "adjustment", action: "create", args: { memberId: member.id, amount: 1_000, reason: "Opening due" } });
+    expect(await db.adjustment.count()).toBe(1);
+    const editorSession = await editorSignIn();
+    const editorDeps = { db, session: editorSession };
+    const denied = await executeWrite(editorDeps, "editor", { entity: "adjustment", action: "create", args: { memberId: member.id, amount: 1_000, reason: "nope" } }).catch((e) => (e as Error).message);
+    expect(denied).toBe("Adjustments are Admin-only");
+    expect(await db.adjustment.count()).toBe(1);
+    const adjustment = await db.adjustment.findFirstOrThrow();
+    await executeDelete(deps(), "admin", { entity: "adjustment", id: adjustment.id });
+    expect((await db.adjustment.findUnique({ where: { id: adjustment.id } }))?.deletedAt).not.toBeNull();
+
+    await executeWrite(deps(), "admin", { entity: "member", action: "status", id: member.id, args: { status: "inactive", date: "2026-11-01" } });
+    expect((await db.member.findUnique({ where: { id: member.id } }))?.status).toBe("inactive");
+
+    // Share changes are admin-only (editor schema strips the action entirely)
+    await executeWrite(deps(), "admin", { entity: "member", action: "shares", id: member.id, args: { quantity: 3 } });
+    expect(await db.shareAllotment.count({ where: { memberId: member.id, quantity: 3 } })).toBe(1);
+    const editorShares = writeInputSchema("editor").safeParse({ entity: "member", action: "shares", id: member.id, args: { quantity: 3 } });
+    expect(editorShares.success).toBe(false);
+    const editorAdjustment = writeInputSchema("editor").safeParse({ entity: "adjustment", action: "create", args: {} });
+    expect(editorAdjustment.success).toBe(false);
+
+    await executeWrite(deps(), "admin", { entity: "bank", action: "create", args: { bankName: "BRAC Bank", openingBalance: 5_000 } });
+    const brac = await db.bankAccount.findFirstOrThrow({ where: { bankName: "BRAC Bank" } });
+    await previewDelete(deps(), "admin", { entity: "bank", id: brac.id }).then((p) => expect(p.lines.join(" ")).toContain("BRAC Bank"));
+    await executeDelete(deps(), "admin", { entity: "bank", id: brac.id });
+    expect((await db.bankAccount.findUnique({ where: { id: brac.id } }))?.deletedAt).not.toBeNull();
+  });
+
+  test("member create + delete through the dispatchers", async () => {
+    await executeWrite(deps(), "admin", { entity: "member", action: "create", args: { name: "New Member", mobile: "01912345678", joiningDate: "2026-11-01", shareQuantity: 1 } });
+    const created = await db.member.findFirstOrThrow({ where: { name: "New Member" } });
+    expect(created.createdBy).toBe(adminSession.user.id);
+    expect(await db.shareAllotment.count({ where: { memberId: created.id } })).toBe(1); // joining allotment
+    await previewDelete(deps(), "admin", { entity: "member", id: created.id }).then((p) => expect(p.lines.join(" ")).toContain("New Member"));
+    await executeDelete(deps(), "admin", { entity: "member", id: created.id });
+    expect((await db.member.findUnique({ where: { id: created.id } }))?.deletedAt).not.toBeNull();
+  });
+
+  test("generic gate: preview_write → write_record pauses, approval writes, reject does not", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    const input = { entity: "loan", action: "create", args: { memberId: member.id, bankAccountId: bank.id, amount: 7_000, date: "2026-11-05" } };
+    // Turn 1 previews (read tool + text answer end the loop); turn 2 proposes.
+    fake.setResponses([
+      { toolCalls: [{ name: "preview_write", input }] },
+      { text: "Here is the preview." },
+    ]);
+
+    const ctx = ctxFor();
+    const threadId = `web-${adminSession.user.id}`;
+    const conversationId = await ensureConversation(db, ctx, threadId);
+    await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "give Karim a 7000 loan" }] }, adapter: fake, threadId, conversationId }));
+    expect(await db.loan.count()).toBe(0);
+
+    fake.setResponses([{ toolCalls: [{ name: "write_record", input }] }]);
+    const paused = await collectGate(agentStream({ ctx, params: { messages: [{ id: "2", role: "user", content: "ok, record it" }] }, adapter: fake, threadId, conversationId }));
+    expect(paused.interruptId).toBeDefined();
+
+    // Reject → nothing
+    fake.appendResponses([{ text: "Nothing recorded." }]);
+    await collectGate(agentStream({
+      ctx,
+      params: { messages: paused.snapshotMessages as never, runId: "r2", parentRunId: paused.interruptedRunId, resume: [{ interruptId: paused.interruptId!, status: "resolved", payload: { approved: false } }] as never },
+      adapter: fake, threadId, conversationId,
+    }));
+    expect(await db.loan.count()).toBe(0);
+
+    // A fresh proposal, approved → written by the service
+    fake.appendResponses([]);
+    fake.setResponses([{ toolCalls: [{ name: "write_record", input }] }, { text: "Recorded." }]);
+    const paused2 = await collectGate(agentStream({ ctx, params: { messages: [{ id: "2", role: "user", content: "ok do it" }] }, adapter: fake, threadId, conversationId }));
+    fake.appendResponses([{ text: "Done." }]);
+    await collectGate(agentStream({
+      ctx,
+      params: { messages: paused2.snapshotMessages as never, runId: "r3", parentRunId: paused2.interruptedRunId, resume: [{ interruptId: paused2.interruptId!, status: "resolved", payload: { approved: true } }] as never },
+      adapter: fake, threadId, conversationId,
+    }));
+    expect(await db.loan.count({ where: { amount: 7_000 } })).toBe(1);
+    const loan = await db.loan.findFirstOrThrow({ where: { amount: 7_000 } });
+    expect(loan.createdBy).toBe(adminSession.user.id);
+  });
+
+  test("unknown entity:action combinations are refused in both registries", async () => {
+    expect(await executeWrite(deps(), "admin", { entity: "member", action: "repay", args: {} }).catch((e) => (e as Error).message)).toContain("not available");
+    expect(await executeWrite(deps(), "admin", { entity: "bank", action: "repay", args: {} }).catch((e) => (e as Error).message)).toContain("not available");
+  });
+});
+
+async function editorSignIn() {
+  await auth.api.signUpEmail({ body: { name: "Editor Two", email: "editor-two@test.local", password: "password-123" } });
+  const response = await auth.api.signInEmail({ body: { email: "editor-two@test.local", password: "password-123" }, asResponse: true });
+  const cookie = response.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+  const session = await auth.api.getSession({ headers: new Headers({ cookie }) });
+  if (!session) throw new Error("editor sign-in failed");
+  return session;
+}
