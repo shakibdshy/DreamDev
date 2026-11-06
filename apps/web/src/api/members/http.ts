@@ -1,6 +1,7 @@
 import { appContext, ok, readBody, withApi, type ApiResolver } from "../route-helpers";
 
 import { changeShares, createMember, getMember, listMembers, purgeMember, setStatus, softDeleteMember, updateMember } from "./service";
+import { issueMemberPairing, memberTelegramStatus, setMemberNotifyRoute, unlinkMemberRoute } from "@/telegram/member-ops";
 
 /** HTTP handlers for /api/members. */
 
@@ -28,6 +29,14 @@ export function membersApi(resolve: ApiResolver) {
       const purge = new URL(request.url).searchParams.get("purge") === "true";
       return purge ? purgeMember(ctx, params.id) : softDeleteMember(ctx, params.id);
     }, resolve),
+
+    postTelegramPair: withApi(async (ctx, _request, params) => ok(await issueMemberPairing(ctx, params.id), 201), resolve),
+
+    getTelegramStatus: withApi(async (ctx, _request, params) => memberTelegramStatus(ctx, params.id), resolve),
+
+    deleteTelegram: withApi(async (ctx, _request, params) => unlinkMemberRoute(ctx, params.id), resolve),
+
+    postTelegramNotify: withApi(async (ctx, request, params) => setMemberNotifyRoute(ctx, params.id, await readBody(request)), resolve),
   };
 }
 

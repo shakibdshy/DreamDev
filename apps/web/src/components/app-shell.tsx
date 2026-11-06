@@ -15,10 +15,11 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { AgentPanel } from "./agent/agent-panel";
 import { ThemeToggle } from "./theme-toggle";
 import UserMenu from "./user-menu";
 
-interface ShellUser {
+export interface ShellUser {
   name: string;
   email: string;
   role: string;
@@ -223,6 +224,7 @@ export function AppShell({ user, children }: { user: ShellUser; children: ReactN
       </div>
 
       <MobileNav open={mobileOpen} onClose={() => setMobileOpen(false)} user={user} />
+      <AgentPanel user={user} />
     </div>
   );
 }

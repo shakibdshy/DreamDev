@@ -10,6 +10,8 @@ import { HttpError, parseOr422, requireUser } from "../http";
  * the optional month is a label.
  */
 
+import { notifyMemberEvent } from "@/telegram/notify";
+
 export const createAdjustmentBodySchema = z
   .object({
     memberId: z.string().min(1),
@@ -45,9 +47,11 @@ export async function createAdjustment(deps: AdjustmentDeps, body: unknown) {
   const member = await deps.db.member.findUnique({ where: { id: input.memberId } });
   if (!member || member.deletedAt) throw new HttpError(404, "Member not found");
 
-  return deps.db.adjustment.create({
+  const adjustment = await deps.db.adjustment.create({
     data: { memberId: input.memberId, amount: input.amount, month: input.month, reason: input.reason, createdBy: user.id },
   });
+  await notifyMemberEvent({ db: deps.db }, { memberId: input.memberId, type: "adjustment_recorded", recordId: adjustment.id });
+  return adjustment;
 }
 
 export async function updateAdjustment(deps: AdjustmentDeps, id: string, body: unknown) {
@@ -55,7 +59,7 @@ export async function updateAdjustment(deps: AdjustmentDeps, id: string, body: u
   const input = parseOr422(updateAdjustmentBodySchema, body);
   const existing = await deps.db.adjustment.findUnique({ where: { id } });
   if (!existing || existing.deletedAt) throw new HttpError(404, "Adjustment not found");
-  return deps.db.adjustment.update({
+  const updated = await deps.db.adjustment.update({
     where: { id },
     data: {
       ...(input.amount !== undefined ? { amount: input.amount } : {}),
@@ -64,6 +68,8 @@ export async function updateAdjustment(deps: AdjustmentDeps, id: string, body: u
       updatedBy: user.id,
     },
   });
+  await notifyMemberEvent({ db: deps.db }, { memberId: existing.memberId, type: "adjustment_updated", recordId: id });
+  return updated;
 }
 
 export async function softDeleteAdjustment(deps: AdjustmentDeps, id: string) {
@@ -71,5 +77,6 @@ export async function softDeleteAdjustment(deps: AdjustmentDeps, id: string) {
   const existing = await deps.db.adjustment.findUnique({ where: { id } });
   if (!existing || existing.deletedAt) throw new HttpError(404, "Adjustment not found");
   await deps.db.adjustment.update({ where: { id }, data: { deletedAt: new Date() } });
+  await notifyMemberEvent({ db: deps.db }, { memberId: existing.memberId, type: "adjustment_deleted", recordId: id });
   return { ok: true };
 }

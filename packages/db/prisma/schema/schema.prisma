@@ -22,11 +22,17 @@ model Member {
   notes       String?
   status      String    @default("active") // active | inactive | exited
   exitDate    DateTime? @db.Date
+  // Telegram binding (receive-only notifications, #14). One chat per member.
+  telegramChatId   String?
+  telegramLinkedAt DateTime?
+  notifyEnabled    Boolean @default(true)
   deletedAt   DateTime?
   createdBy   String?
   updatedBy   String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  @@unique([telegramChatId])
 
   contributions  Contribution[]
   loans          Loan[]
@@ -222,4 +228,92 @@ model SharePriceEntry {
 
   @@unique([effectiveMonth])
   @@map("share_price_entry")
+}
+
+// AI agent audit trail (spec #14): every agent conversation, message, and
+// tool call is persisted — the agent acts as a User and must be reviewable.
+// One ongoing conversation per user per channel; threadId is opaque.
+model AgentConversation {
+  id        String         @id @default(uuid())
+  userId    String
+  threadId  String
+  channel   String         @default("web") // web | telegram
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  messages  AgentMessage[]
+
+  @@unique([userId, threadId])
+  @@map("agent_conversation")
+}
+
+model AgentMessage {
+  id             String            @id @default(uuid())
+  conversationId String
+  role           String // user | assistant | tool
+  content        String            @default("")
+  // Tool audit: set when role = "tool"
+  toolName       String?
+  toolArgsJson   String?
+  toolResultJson String?
+  createdAt      DateTime          @default(now())
+
+  conversation AgentConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@map("agent_message")
+}
+
+// Single-use deep-link pairing codes binding a Telegram chat to a dashboard
+// User or a Member (#14). 15-minute TTL; consumed on /start.
+model TelegramPairingCode {
+  id         String    @id @default(uuid())
+  code       String    @unique
+  targetType String // user | member
+  targetId   String
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdBy  String?
+  createdAt  DateTime  @default(now())
+
+  @@index([targetType, targetId])
+  @@map("telegram_pairing_code")
+}
+
+// Server-held approval pauses for Telegram agent turns (#14): the webhook is
+// stateless, so a paused confirm (inline keyboard) survives in the DB until
+// the callback resumes it or the 10-minute expiry lapses. One per chat.
+model AgentPausedApproval {
+  id               String   @id @default(uuid())
+  chatId           String   @unique
+  userId           String
+  threadId         String
+  interruptId      String
+  interruptedRunId String
+  toolName         String
+  argsJson         String
+  messagesJson     String // exact AG-UI snapshot the resume rebuilds from
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  @@map("agent_paused_approval")
+}
+
+// Delivery log for member Telegram notifications (#14): one row per event,
+// deduped per (record, event, member); failed sends retry on the member's
+// next touching write using the stored content.
+model NotificationLog {
+  id                String    @id @default(uuid())
+  memberId          String
+  type              String // contribution_recorded | contribution_updated | contribution_deleted | loan_recorded | loan_deleted | repayment_recorded | adjustment_recorded | adjustment_updated | adjustment_deleted | shares_changed | status_changed
+  recordId          String
+  status            String // sent | failed | skipped-no-chat | disabled
+  content           String
+  telegramMessageId Int?
+  error             String?
+  retriedAt         DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@unique([recordId, type, memberId])
+  @@index([memberId, status])
+  @@map("notification_log")
 }

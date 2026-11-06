@@ -1,5 +1,6 @@
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
+import { notifyMemberEvent } from "@/telegram/notify";
 
 import { HttpError, parseOr422, requireUser } from "../http";
 import { assertMoneyOutCovers } from "../banks/service";
@@ -94,6 +95,7 @@ export async function createLoan(deps: LoansDeps, body: unknown) {
       createdBy: user.id,
     },
   });
+  await notifyMemberEvent({ db: deps.db }, { memberId: input.memberId, type: "loan_recorded", recordId: loan.id });
   return { loan, warning };
 }
 
@@ -132,6 +134,7 @@ export async function createRepayment(deps: LoansDeps, loanId: string, body: unk
     },
   });
   const settled = outstanding - input.amount === 0;
+  await notifyMemberEvent({ db: deps.db }, { memberId: loan.memberId, type: "repayment_recorded", recordId: repayment.id });
   return { repayment, settled, outstandingAfter: outstanding - input.amount };
 }
 
@@ -145,5 +148,6 @@ export async function softDeleteLoan(deps: LoansDeps, loanId: string) {
     deps.db.loan.update({ where: { id: loanId }, data: { deletedAt: now } }),
     deps.db.loanRepayment.updateMany({ where: { loanId }, data: { deletedAt: now } }),
   ]);
+  await notifyMemberEvent({ db: deps.db }, { memberId: loan.memberId, type: "loan_deleted", recordId: loanId });
   return { ok: true };
 }

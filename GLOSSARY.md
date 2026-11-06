@@ -97,3 +97,21 @@ _Avoid_: withdrawal, charge, cost
 **Transfer**:
 Money moved between the Team's own Bank Accounts.
 _Avoid_: movement, internal transaction
+
+### AI Agent & Telegram
+
+**Fund Assistant**:
+The AI agent inside the dashboard (floating panel) and on Telegram for linked Users. It looks up anything and may record or remove records — always through a Confirm Gate, acting as the signed-in User.
+_Avoid_: bot (alone), chatbot, AI (alone)
+
+**Confirm Gate**:
+The mandatory pause before the agent writes anything: a card (web) or inline keyboard (Telegram) shows the canonical values from the database, and nothing is recorded until the User approves. Reject and expiry record nothing. Deletes show the record's human identifier (name + amount) and never hard-delete.
+_Avoid_: confirmation dialog, approval flow (alone)
+
+**Pairing Code**:
+A single-use, 15-minute code binding one Telegram chat to one identity — a dashboard User (full assistant) or a Member (notifications only). Sent as a `t.me/<bot>?start=CODE` link.
+_Avoid_: invite code, token
+
+**Notification-Only**:
+A Member's Telegram channel: they receive messages about their own records and nothing else. The bot replies "notification-only" to anything a Member sends.
+_Avoid_: read-only, member bot

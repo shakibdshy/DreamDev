@@ -37,6 +37,7 @@ import { BankSelect, useBankBalance } from "@/components/bank-select";
 import { EmptyState } from "@/components/empty-state";
 import { DatePicker } from "@/components/date-picker";
 import { MemberActions } from "@/components/member-actions";
+import { MemberTelegramCard } from "@/components/telegram/member-telegram-card";
 import { Field } from "@/components/field";
 import { StatusBadge } from "@/components/status-badge";
 import { api } from "@/lib/api";
@@ -405,6 +406,8 @@ function MemberDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      <MemberTelegramCard memberId={id} isAdmin={isAdmin} />
 
       <ShareChangeDialog
         key={`${currentShares}-${shares.length}`}

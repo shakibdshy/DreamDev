@@ -6,6 +6,7 @@ import { projectMonths, type MonthCell } from "@DreamDev/db/domain/projection";
 import { dueSummary, type DueSummary } from "@DreamDev/db/domain/due";
 
 import { HttpError, parseOr422, requireUser } from "../http";
+import { notifyMemberEvent } from "@/telegram/notify";
 import { getPriceEntries, memberFacts, toMemberEntries } from "./billing-facts";
 import {
   changeSharesBodySchema,
@@ -252,9 +253,10 @@ export async function changeShares(deps: MembersDeps, id: string, body: unknown)
   if (compareMonths(effectiveMonth, monthOfDate(new Date())) < 0) {
     throw new HttpError(422, "Share changes are forward-effective only — past months never change");
   }
-  await deps.db.shareAllotment.create({
+  const allotment = await deps.db.shareAllotment.create({
     data: { memberId: id, quantity: input.quantity, effectiveMonth, createdBy: user.id },
   });
+  await notifyMemberEvent({ db: deps.db }, { memberId: id, type: "shares_changed", recordId: allotment.id });
 
   return { id, quantity: input.quantity, effectiveMonth };
 }
@@ -269,14 +271,17 @@ export async function setStatus(deps: MembersDeps, id: string, body: unknown) {
   if (!member || member.deletedAt) throw new HttpError(404, "Member not found");
   if (member.status === input.status) throw new HttpError(409, `Member is already ${input.status}`);
 
-  return deps.db.$transaction(async (tx) => {
-    await tx.memberStatusChange.create({ data: { memberId: id, status: input.status, date, note: input.note, createdBy: user.id } });
-    return tx.member.update({
+  const updated = await deps.db.$transaction(async (tx) => {
+    const change = await tx.memberStatusChange.create({ data: { memberId: id, status: input.status, date, note: input.note, createdBy: user.id } });
+    const member = await tx.member.update({
       where: { id },
       data: { status: input.status, ...(input.status === "exited" ? { exitDate: date } : { exitDate: null }) },
       select: publicMember,
     });
+    return { member, changeId: change.id };
   });
+  await notifyMemberEvent({ db: deps.db }, { memberId: id, type: "status_changed", recordId: updated.changeId });
+  return updated.member;
 }
 
 export async function softDeleteMember(deps: MembersDeps, id: string) {

@@ -13,7 +13,12 @@ model User {
   role   String @default("editor")
   status String @default("active")
 
+  // Telegram binding for the bot agent chat (#14). One chat per user.
+  telegramChatId   String?
+  telegramLinkedAt DateTime?
+
   @@unique([email])
+  @@unique([telegramChatId])
   @@map("user")
 }
 
