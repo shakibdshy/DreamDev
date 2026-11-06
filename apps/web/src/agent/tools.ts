@@ -4,8 +4,9 @@ import { z } from "zod";
 import { getMember, listMembers } from "@/api/members/service";
 import { dashboard } from "@/api/dashboard/service";
 import { listBanks } from "@/api/banks/service";
-import { listFeed, memberPosition } from "@/api/transactions/service";
+import { createContribution, listFeed, memberPosition } from "@/api/transactions/service";
 
+import { previewContributionDef, recordContributionDef } from "./contribution-tools";
 import { serviceDeps, type AgentContext } from "./context";
 
 /**
@@ -208,7 +209,67 @@ const transactionsFeedTool = toolDefinition({
   };
 });
 
-/** All read tools the agent may call. Write tools arrive in later tickets. */
+/** Assembles the canonical preview for a proposed Contribution (read-only). */
+export async function contributionPreview(args: {
+  db: AgentContext["db"];
+  session: AgentContext["session"];
+  memberId: string;
+  bankAccountId: string;
+  amount: number;
+  creditDate: string;
+}) {
+  const position = await memberPosition({ db: args.db, session: args.session }, args.memberId);
+  const banks = await listBanks({ db: args.db, session: args.session }, {});
+  const bank = banks.data.find((b) => b.id === args.bankAccountId);
+  if (!bank) throw new Error("Bank Account not found — call list_banks for valid ids");
+  const dueAfter = position.due - args.amount;
+  return {
+    memberName: position.name,
+    bankName: bank.bankName,
+    amount: args.amount,
+    creditDate: args.creditDate,
+    dueBefore: position.due,
+    dueAfter,
+    advanceAfter: Math.max(0, -dueAfter),
+    sharePrice: position.sharePrice,
+    shares: position.shares,
+  };
+}
+
+const previewContributionTool = previewContributionDef.server<AgentContext>(async (args, toolCtx) =>
+  contributionPreview({ ...serviceDeps(toolCtx.context), ...args }),
+);
+
+const recordContributionTool = recordContributionDef.server<AgentContext>(async (args, toolCtx) => {
+  // The executor runs only after the user approves the confirm card. The
+  // service re-validates with the same zod schema the dashboard route uses and
+  // attributes createdBy from the acting session user.
+  const result = await createContribution(serviceDeps(toolCtx.context), args);
+  const position = await memberPosition(serviceDeps(toolCtx.context), result.memberId);
+  return {
+    recorded: true,
+    contributionId: result.id,
+    memberName: position.name,
+    amount: result.amount,
+    creditDate: result.creditDate.toISOString().slice(0, 10),
+  };
+});
+
+/** All tools the agent may call: reads for everyone, gated writes. */
+export function agentTools() {
+  return [
+    listMembersTool,
+    memberPositionTool,
+    memberDetailTool,
+    fundOverviewTool,
+    listBanksTool,
+    transactionsFeedTool,
+    previewContributionTool,
+    recordContributionTool,
+  ];
+}
+
+/** Kept for the read-only seam tests; equals agentTools() filtered to reads. */
 export function readTools() {
-  return [listMembersTool, memberPositionTool, memberDetailTool, fundOverviewTool, listBanksTool, transactionsFeedTool];
+  return agentTools().filter((tool) => !/^record_/.test(tool.name));
 }

@@ -219,3 +219,191 @@ describe("HTTP seam", () => {
     expect(body.messages.at(-1)?.role).toBe("assistant");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ticket 4/8: confirm gate + contribution writes
+// ---------------------------------------------------------------------------
+
+import { previewContributionDef, recordContributionDef } from "./contribution-tools";
+import { contributionPreview } from "./tools";
+
+/** Collects chunks, exposing tool results and interrupt bindings. */
+async function collectGate(stream: AsyncIterable<unknown>) {
+  let text = "";
+  let error: string | undefined;
+  let interruptedRunId: string | undefined;
+  let interruptId: string | undefined;
+  let snapshotMessages: unknown[] = [];
+  let toolResults: { ok?: boolean; error?: unknown }[] = [];
+  for await (const rawChunk of stream) {
+    const chunk = rawChunk as Record<string, unknown>;
+    const c = chunk as {
+      type: string;
+      content?: unknown;
+      delta?: unknown;
+      message?: unknown;
+      ok?: boolean;
+      error?: unknown;
+      outcome?: { type: string; interrupts?: { id: string; metadata?: { "tanstack:interruptBinding"?: { interruptedRunId: string; interruptId: string } } }[] };
+    };
+    if (c.type === "TEXT_MESSAGE_CONTENT") text += String(c.delta ?? "");
+    if (c.type === "RUN_ERROR") error = String(c.message ?? "run error");
+    if (c.type === "TOOL_CALL_RESULT") {
+      // Validation failures arrive as content JSON {"error": "..."} — no ok flag.
+      let contentError: string | undefined;
+      try {
+        const parsed = typeof c.content === "string" ? JSON.parse(c.content) : c.content;
+        if (parsed && typeof parsed === "object" && "error" in parsed) contentError = String((parsed as { error: unknown }).error);
+      } catch {
+        /* non-JSON content */
+      }
+      toolResults.push({ ok: c.ok, error: c.error ?? contentError });
+    }
+    if (c.type === "MESSAGES_SNAPSHOT") snapshotMessages = (chunk as { messages: unknown[] }).messages;
+    if (c.type === "RUN_FINISHED" && c.outcome?.type === "interrupt") {
+      const binding = c.outcome.interrupts?.[0]?.metadata?.["tanstack:interruptBinding"];
+      interruptedRunId = binding?.interruptedRunId;
+      interruptId = binding?.interruptId;
+    }
+  }
+  return { text, error, interruptedRunId, interruptId, snapshotMessages, toolResults };
+}
+
+describe("confirm gate: contribution writes (ticket 4/8)", () => {
+  const proposeInput = (memberId: string, bankAccountId: string, overrides: Record<string, unknown> = {}) => ({
+    memberId,
+    bankAccountId,
+    amount: 10_000,
+    creditDate: "2026-10-20",
+    ...overrides,
+  });
+
+  test("preview returns canonical names and the due math", async () => {
+    const { member, bank } = await seedFund();
+    const preview = await contributionPreview({
+      db, session: adminSession, memberId: member.id, bankAccountId: bank.id, amount: 10_000, creditDate: "2026-10-20",
+    });
+    expect(preview.memberName).toBe("Rahim Uddin");
+    expect(preview.bankName).toBe("Dutch-Bangla Bank");
+    expect(preview.dueBefore).toBe(100_000);
+    expect(preview.dueAfter).toBe(90_000);
+    expect(preview.advanceAfter).toBe(0);
+    expect(preview.sharePrice).toBe(5000);
+  });
+
+  test("preview flips to Advance when the payment overpays", async () => {
+    const { member, bank } = await seedFund();
+    const preview = await contributionPreview({
+      db, session: adminSession, memberId: member.id, bankAccountId: bank.id, amount: 120_000, creditDate: "2026-10-20",
+    });
+    expect(preview.dueAfter).toBe(-20_000);
+    expect(preview.advanceAfter).toBe(20_000);
+  });
+
+  test("unknown bank id in a proposal is a tool error, never a write", async () => {
+    const { member } = await seedFund();
+    expect(
+      contributionPreview({ db, session: adminSession, memberId: member.id, bankAccountId: "nope", amount: 1000, creditDate: "2026-10-20" }).catch(() => "tool error"),
+    ).resolves.toBe("tool error");
+  });
+
+  test("approval pauses without writing; approved resume writes with attribution", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    fake.setResponses([{ toolCalls: [{ name: "record_contribution", input: proposeInput(member.id, bank.id) }] }]);
+
+    const ctx = ctxFor();
+    const threadId = `web-${adminSession.user.id}`;
+    const conversationId = await ensureConversation(db, ctx, threadId);
+    await db.agentMessage.create({ data: { conversationId, role: "user", content: "record 10000 for Rahim" } });
+
+    // Run 1: the proposal pauses on the gate — zero writes.
+    const paused = await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "record 10000 for Rahim" }] }, adapter: fake, threadId, conversationId }));
+    expect(paused.interruptId).toBeDefined();
+    expect(paused.interruptedRunId).toBeDefined();
+    expect(await db.contribution.count()).toBe(1); // only the seeded one
+    expect(await db.contribution.count({ where: { creditDate: new Date("2026-10-20T00:00:00Z") } })).toBe(0);
+
+    // Run 2: approved resume — the service writes exactly as the dashboard would.
+    fake.appendResponses([{ text: "Recorded ৳10,000 for Rahim Uddin." }]);
+    const resumed = await collectGate(agentStream({
+      ctx,
+      params: {
+        messages: paused.snapshotMessages as never,
+        runId: "resume-run",
+        parentRunId: paused.interruptedRunId,
+        resume: [{ interruptId: paused.interruptId!, status: "resolved", payload: { approved: true } }] as never,
+      },
+      adapter: fake,
+      threadId,
+      conversationId,
+    }));
+    expect(resumed.error).toBeUndefined();
+    const created = await db.contribution.findFirst({ where: { creditDate: new Date("2026-10-20T00:00:00Z") } });
+    expect(created?.amount).toBe(10_000);
+    expect(created?.createdBy).toBe(adminSession.user.id); // attribution
+    expect(created?.sharePriceAtEntry).toBe(5000); // snapshot invariant intact
+    expect(created?.shareQtyAtEntry).toBe(2);
+
+    // Audit recorded the gated write
+    const toolRows = await db.agentMessage.findMany({ where: { conversationId, role: "tool" } });
+    expect(toolRows.some((r) => r.toolName === "record_contribution")).toBe(true);
+  });
+
+  test("rejected resume writes nothing", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    fake.setResponses([{ toolCalls: [{ name: "record_contribution", input: proposeInput(member.id, bank.id) }] }]);
+
+    const ctx = ctxFor();
+    const threadId = `web-${adminSession.user.id}`;
+    const conversationId = await ensureConversation(db, ctx, threadId);
+    const paused = await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "record it" }] }, adapter: fake, threadId, conversationId }));
+
+    fake.appendResponses([{ text: "Understood — nothing was recorded." }]);
+    const resumed = await collectGate(agentStream({
+      ctx,
+      params: {
+        messages: paused.snapshotMessages as never,
+        runId: "resume-run",
+        parentRunId: paused.interruptedRunId,
+        resume: [{ interruptId: paused.interruptId!, status: "resolved", payload: { approved: false } }] as never,
+      },
+      adapter: fake,
+      threadId,
+      conversationId,
+    }));
+    expect(resumed.text).toContain("nothing was recorded");
+    expect(await db.contribution.count()).toBe(1); // seed only — zero writes
+  });
+
+  test("sanity caps reject before any card would appear", async () => {
+    const { member, bank } = await seedFund();
+    const caps = [
+      proposeInput(member.id, bank.id, { amount: 0 }),
+      proposeInput(member.id, bank.id, { amount: 10_000_001 }),
+      proposeInput(member.id, bank.id, { amount: 5000.5 }),
+      proposeInput(member.id, bank.id, { creditDate: "2027-01-31" }), // > 35 days future
+    ];
+    for (const [index, input] of caps.entries()) {
+      const fake = fakeText();
+      fake.setResponses([{ toolCalls: [{ name: "record_contribution", input }] }, { text: "cannot do that" }]);
+      const ctx = ctxFor();
+      const threadId = `web-${adminSession.user.id}`;
+      const conversationId = await ensureConversation(db, ctx, threadId);
+      const result = await collectGate(agentStream({ ctx, params: { messages: [{ id: "1", role: "user", content: "try it" }] }, adapter: fake, threadId, conversationId }));
+      expect(result.interruptId).toBeUndefined(); // never reached a card
+      expect(result.toolResults.some((r) => r.error !== undefined)).toBe(true);
+      // The validation error goes back to the model so it self-corrects
+      if (index === 0) {
+        expect(result.toolResults.some((r) => String(r.error).includes("Amount must be at least"))).toBe(true);
+      }
+    }
+    expect(await db.contribution.count()).toBe(1);
+  });
+
+  test("preview tool is ungated; record tool requires approval", () => {
+    expect(previewContributionDef.needsApproval).toBeUndefined();
+    expect(recordContributionDef.needsApproval).toBe(true);
+  });
+});

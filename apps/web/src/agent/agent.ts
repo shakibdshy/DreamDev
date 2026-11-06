@@ -3,7 +3,7 @@ import { chat, maxIterations, type AnyTextAdapter, type ChatMiddleware } from "@
 import type { Database } from "@DreamDev/db";
 
 import { systemPrompt } from "./prompt";
-import { readTools } from "./tools";
+import { agentTools } from "./tools";
 import type { AgentContext } from "./context";
 
 /**
@@ -17,6 +17,8 @@ export interface ChatParamsLike {
   messages: Parameters<typeof chat>[0]["messages"];
   runId?: string;
   parentRunId?: string | null;
+  /** Interrupt answers from an approval (resume of a paused run). */
+  resume?: Parameters<typeof chat>[0]["resume"];
 }
 
 /** Sliding-window rate limiter (~60 agent messages/hour per user, in-memory). */
@@ -109,8 +111,9 @@ export function agentStream(args: {
     threadId,
     ...(params.runId ? { runId: params.runId } : {}),
     ...(params.parentRunId ? { parentRunId: params.parentRunId } : {}),
+    ...(params.resume ? { resume: params.resume } : {}),
     systemPrompts: [systemPrompt(ctx)],
-    tools: readTools(),
+    tools: agentTools(),
     context: ctx,
     agentLoopStrategy: maxIterations(8),
     middleware: [auditMiddleware(conversationId, ctx.db)],

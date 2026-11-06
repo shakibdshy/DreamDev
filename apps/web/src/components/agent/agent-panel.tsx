@@ -1,22 +1,29 @@
-import { useChat, fetchServerSentEvents } from "@tanstack/ai-react";
+import { useChat, fetchServerSentEvents, type UseChatReturn } from "@tanstack/ai-react";
 import type { UIMessage } from "@tanstack/ai";
-import { BotIcon, Loader2Icon, MessageCircleIcon, SendIcon, XIcon } from "lucide-react";
+import { BotIcon, CheckIcon, Loader2Icon, MessageCircleIcon, SendIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { formatTaka } from "@DreamDev/db/domain/money";
 import { Button } from "@DreamDev/ui/components/button";
 import { Input } from "@DreamDev/ui/components/input";
 
+import { previewContributionDef, recordContributionDef, type ContributionPreview } from "@/agent/contribution-tools";
 import type { ShellUser } from "../app-shell";
+
+type AgentTools = readonly [typeof previewContributionDef, typeof recordContributionDef];
+type AgentChat = UseChatReturn<AgentTools>;
+type AgentUIMessage = AgentChat["messages"][number];
 
 /**
  * The fund assistant: a floating chat panel available on every authenticated
- * page (ticket 3/8). Read-only in this version — write tools and approval
- * cards arrive in ticket 4/8.
+ * page. Contribution recording pauses on a confirm card (ticket 4/8) whose
+ * values come from the canonical preview_contribution result — never from
+ * model-paraphrased text.
  */
 
 export function AgentPanel({ user }: { user: ShellUser }) {
   const [open, setOpen] = useState(false);
-  const [history, setHistory] = useState<UIMessage[] | null>(null);
+  const [history, setHistory] = useState<AgentUIMessage[] | null>(null);
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -24,6 +31,7 @@ export function AgentPanel({ user }: { user: ShellUser }) {
     connection: fetchServerSentEvents("/api/agent/chat"),
     threadId: `web-${user.email}`,
     initialMessages: history ?? [],
+    tools: [previewContributionDef, recordContributionDef],
   });
 
   // Load the persisted conversation once, when the panel first opens.
@@ -31,7 +39,7 @@ export function AgentPanel({ user }: { user: ShellUser }) {
     if (!open || history) return;
     fetch("/api/agent/chat")
       .then((r) => (r.ok ? r.json() : { messages: [] }))
-      .then((body: { messages?: UIMessage[] }) => setHistory(body.messages ?? []))
+      .then((body: { messages?: AgentUIMessage[] }) => setHistory(body.messages ?? []))
       .catch(() => setHistory([]));
   }, [open, history]);
 
@@ -126,6 +134,56 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                 The assistant is unavailable right now. Try again shortly.
               </p>
             ) : null}
+
+            {chat.interrupts.map((interrupt) => {
+              if (interrupt.kind !== "tool-approval" || interrupt.toolName !== "record_contribution") return null;
+              // Canonical values from the correlated preview result — the same
+              // numbers the service will write, never the model's paraphrase.
+              const preview = findLatestPreview(chat.messages as UIMessage<never>[], interrupt.id);
+              return (
+                <div key={interrupt.id} className="rounded-xl border border-primary/30 bg-primary/5 p-3">
+                  <p className="flex items-center gap-2 text-sm font-medium">
+                    <CheckIcon className="size-4 text-primary" aria-hidden />
+                    Confirm contribution
+                  </p>
+                  {preview ? (
+                    <dl className="mt-2 space-y-1 text-xs">
+                      <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Member</dt><dd className="font-medium">{preview.memberName}</dd></div>
+                      <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Amount</dt><dd className="font-medium tabular">{formatTaka(preview.amount)}</dd></div>
+                      <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Credit Date</dt><dd className="font-medium">{preview.creditDate}</dd></div>
+                      <div className="flex justify-between gap-2"><dt className="text-muted-foreground">Bank Account</dt><dd className="font-medium">{preview.bankName}</dd></div>
+                      <div className="flex justify-between gap-2 border-t border-border pt-1">
+                        <dt className="text-muted-foreground">Due after</dt>
+                        <dd className={cnDue(preview.dueAfter)}>{preview.dueAfter > 0 ? formatTaka(preview.dueAfter) : preview.dueAfter < 0 ? `Advance ${formatTaka(preview.advanceAfter)}` : "Settled"}</dd>
+                      </div>
+                    </dl>
+                  ) : (
+                    <p className="mt-2 text-xs text-muted-foreground">Check the values before approving.</p>
+                  )}
+                  <div className="mt-3 flex gap-2">
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      disabled={!interrupt.canResolve || chat.resuming}
+                      onClick={() => interrupt.resolveInterrupt(true)}
+                    >
+                      {chat.resuming ? <Loader2Icon className="size-4 animate-spin" /> : <CheckIcon className="size-4" />}
+                      Approve
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="flex-1"
+                      disabled={!interrupt.canResolve || chat.resuming}
+                      onClick={() => interrupt.resolveInterrupt(false)}
+                    >
+                      <XIcon className="size-4" />
+                      Reject
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           <form
@@ -149,4 +207,46 @@ export function AgentPanel({ user }: { user: ShellUser }) {
       ) : null}
     </>
   );
+}
+
+/**
+ * The canonical preview for the interrupt: the result part of the last
+ * preview_contribution call. The interrupt's id is the paused tool-call id,
+ * so a direct match wins; otherwise the newest preview in the thread.
+ */
+function findLatestPreview(messages: readonly UIMessage<never>[], interruptId: string): ContributionPreview | null {
+  let fallback: ContributionPreview | null = null;
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-result") continue;
+      const resultPart = part as { type: "tool-result"; toolCallId?: string; name?: string; content?: unknown };
+      if (resultPart.name !== previewContributionDef.name) continue;
+      const parsed = parsePreview(resultPart.content);
+      if (!parsed) continue;
+      if (resultPart.toolCallId === interruptId) return parsed;
+      fallback = parsed;
+    }
+  }
+  return fallback;
+}
+
+function parsePreview(content: unknown): ContributionPreview | null {
+  const raw = typeof content === "string" ? safeJson(content) : content;
+  if (!raw || typeof raw !== "object") return null;
+  const candidate = raw as Partial<ContributionPreview> & { output?: unknown; result?: unknown };
+  const source = (candidate.output ?? candidate.result ?? candidate) as Partial<ContributionPreview>;
+  if (typeof source.memberName !== "string" || typeof source.amount !== "number") return null;
+  return source as ContributionPreview;
+}
+
+function safeJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function cnDue(due: number): string {
+  return due > 0 ? "font-medium text-destructive tabular" : "font-medium text-success tabular";
 }
