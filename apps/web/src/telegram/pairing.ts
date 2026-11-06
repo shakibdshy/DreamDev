@@ -61,15 +61,38 @@ export async function consumePairingCode(db: Database, code: string): Promise<Co
 
 const chatTaken = new HttpError(409, "This Telegram chat is already linked to another account");
 
-/** Binds a chat to the target User; one chat = one identity. (Member binding arrives with ticket 2/8.) */
-export async function bindChat(db: Database, consumed: ConsumedPairing, chatId: string): Promise<"user"> {
-  if (consumed.targetType !== "user") throw new HttpError(400, "This code is not a dashboard-user code");
-  const user = await db.user.findUnique({ where: { id: consumed.targetId } });
-  if (!user) throw new HttpError(404, "User not found");
-  const linked = await db.user.findFirst({ where: { telegramChatId: chatId } });
-  if (linked && linked.id !== user.id) throw chatTaken;
-  await db.user.update({ where: { id: user.id }, data: { telegramChatId: chatId, telegramLinkedAt: new Date() } });
-  return "user";
+/** Binds a chat to the target User or Member; one chat = one identity across both tables. */
+export async function bindChat(db: Database, consumed: ConsumedPairing, chatId: string): Promise<"user" | "member"> {
+  const userIdentityTaken = await db.user.findFirst({ where: { telegramChatId: chatId } });
+  const memberIdentityTaken = await db.member.findFirst({ where: { telegramChatId: chatId } });
+  const takenByIdentity =
+    (userIdentityTaken && (consumed.targetType !== "user" || userIdentityTaken.id !== consumed.targetId)) ||
+    (memberIdentityTaken && (consumed.targetType !== "member" || memberIdentityTaken.id !== consumed.targetId));
+  if (takenByIdentity) throw chatTaken;
+
+  if (consumed.targetType === "user") {
+    const user = await db.user.findUnique({ where: { id: consumed.targetId } });
+    if (!user) throw new HttpError(404, "User not found");
+    await db.user.update({ where: { id: user.id }, data: { telegramChatId: chatId, telegramLinkedAt: new Date() } });
+    return "user";
+  }
+
+  const member = await db.member.findUnique({ where: { id: consumed.targetId } });
+  if (!member || member.deletedAt) throw new HttpError(404, "Member not found");
+  await db.member.update({ where: { id: member.id }, data: { telegramChatId: chatId, telegramLinkedAt: new Date() } });
+  return "member";
+}
+
+export async function unlinkMember(db: Database, memberId: string, updatedBy: string): Promise<void> {
+  const member = await db.member.findUnique({ where: { id: memberId } });
+  if (!member || member.deletedAt) throw new HttpError(404, "Member not found");
+  await db.member.update({ where: { id: memberId }, data: { telegramChatId: null, telegramLinkedAt: null, updatedBy } });
+}
+
+export async function setMemberNotify(db: Database, memberId: string, enabled: boolean, updatedBy: string): Promise<void> {
+  const member = await db.member.findUnique({ where: { id: memberId } });
+  if (!member || member.deletedAt) throw new HttpError(404, "Member not found");
+  await db.member.update({ where: { id: memberId }, data: { notifyEnabled: enabled, updatedBy } });
 }
 
 export async function unlinkUser(db: Database, userId: string): Promise<void> {

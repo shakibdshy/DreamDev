@@ -9,6 +9,7 @@ import { verifyWebhookSecret } from "./http";
 import { bindChat, consumePairingCode, generateCode, issuePairingCode, unlinkUser } from "./pairing";
 import { createUpdateHandler, UpdateDeduper, type TelegramUpdate } from "./updates";
 import { telegramApi } from "./http";
+import { issueMemberPairing, memberTelegramStatus, setMemberNotifyRoute, unlinkMemberRoute } from "./member-ops";
 
 let db: Database;
 let auth: ReturnType<typeof createAuth>;
@@ -119,11 +120,12 @@ describe("pairing codes", () => {
   });
 });
 
+const startUpdate = (updateId: number, chatId: string, text: string): TelegramUpdate => ({
+  update_id: updateId,
+  message: { chat: { id: chatId }, text, from: { first_name: "Admin" } },
+});
+
 describe("update handling", () => {
-  const startUpdate = (updateId: number, chatId: string, text: string): TelegramUpdate => ({
-    update_id: updateId,
-    message: { chat: { id: chatId }, text, from: { first_name: "Admin" } },
-  });
 
   test("/start CODE links the user and confirms", async () => {
     const { client, sent } = fakeClient();
@@ -247,5 +249,121 @@ describe("client", () => {
     const failed = await createTelegramClient("T0KEN", failFetch).sendMessage("555", "hello");
     expect(failed.ok).toBe(false);
     expect(failed.description).toBe("offline");
+  });
+});
+
+describe("member pairing (ticket 2/8)", () => {
+  let memberSeq = 0;
+  const seedMember = async () => {
+    memberSeq += 1;
+    return db.member.create({ data: { name: `Karim Mia ${memberSeq}`, mobile: `0181234${String(memberSeq).padStart(4, "0")}`, joiningDate: new Date("2026-02-01") } });
+  };
+
+  test("/start member code binds the member with the notification-only welcome", async () => {
+    const member = await seedMember();
+    const { client, sent } = fakeClient();
+    const handle = createUpdateHandler({ db, client });
+    const issued = await issuePairingCode(db, { targetType: "member", targetId: member.id });
+
+    await handle(startUpdate(1, "888", `/start ${issued.code}`));
+
+    const fresh = await db.member.findUnique({ where: { id: member.id } });
+    expect(fresh?.telegramChatId).toBe("888");
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.text).toContain("notification-only");
+  });
+
+  test("member messages after binding get exactly the notification-only reply", async () => {
+    const member = await seedMember();
+    const { client, sent } = fakeClient();
+    const handle = createUpdateHandler({ db, client });
+    const issued = await issuePairingCode(db, { targetType: "member", targetId: member.id });
+    await handle(startUpdate(1, "888", `/start ${issued.code}`));
+
+    await handle(startUpdate(2, "888", "what is my balance?"));
+    await handle(startUpdate(3, "888", "/help"));
+
+    expect(sent).toHaveLength(3);
+    expect(sent[1]?.text).toBe("This bot is notification-only. You'll receive messages about your fund records here, but it can't answer messages.");
+    expect(sent[2]?.text).toBe(sent[1]?.text);
+  });
+
+  test("one chat cannot bind a user and then a member (cross-identity conflict)", async () => {
+    const member = await seedMember();
+    const { client, sent } = fakeClient();
+    const handle = createUpdateHandler({ db, client });
+
+    await handle(startUpdate(1, "999", `/start ${(await issuePairingCode(db, { targetType: "user", targetId: adminSession.user.id })).code}`));
+    const memberCode = await issuePairingCode(db, { targetType: "member", targetId: member.id });
+    await handle(startUpdate(2, "999", `/start ${memberCode.code}`));
+
+    const fresh = await db.member.findUnique({ where: { id: member.id } });
+    expect(fresh?.telegramChatId).toBeNull();
+    expect(sent[1]?.text).toContain("already linked");
+  });
+
+  test("same member + same chat rebinds idempotently; a different member is rejected", async () => {
+    const member = await seedMember();
+    const other = await seedMember();
+    const issued = await issuePairingCode(db, { targetType: "member", targetId: member.id });
+    const consumed = await consumePairingCode(db, issued.code);
+    expect(await bindChat(db, consumed!, "321")).toBe("member");
+
+    const second = await issuePairingCode(db, { targetType: "member", targetId: member.id });
+    const consumed2 = await consumePairingCode(db, second.code);
+    expect(await bindChat(db, consumed2!, "321")).toBe("member"); // idempotent
+
+    const hijack = await issuePairingCode(db, { targetType: "member", targetId: other.id });
+    const consumed3 = await consumePairingCode(db, hijack.code);
+    expect(await bindChat(db, consumed3!, "321").catch(() => "rejected")).toBe("rejected");
+  });
+
+  test("member ops: pair/status need a user; unlink + notify toggle are admin-only", async () => {
+    const member = await seedMember();
+
+    // Admin pair + status over the HTTP seam
+    const adminApi = () => telegramApi(async () => ({ db, session: adminSession }), {});
+    const status = await adminApi().getStatus({ request: new Request("http://127.0.0.1:5999/api/telegram/status"), params: {} });
+    expect(status.status).toBe(200);
+
+    // Direct member ops seam (editor session → 403 on unlink/notify)
+    await auth.api.signUpEmail({ body: { name: "Editor", email: "editor2@test.local", password: "password-123" } });
+    const editorSession = await (async () => {
+      const response = await auth.api.signInEmail({ body: { email: "editor2@test.local", password: "password-123" }, asResponse: true });
+      const cookie = response.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+      return auth.api.getSession({ headers: new Headers({ cookie }) });
+    })();
+
+    const editorDeps = { db, session: editorSession };
+    const unlinkApi = telegramApi(async () => ({ db, session: editorSession }), {}).postUnlink;
+    expect(typeof unlinkApi).toBe("function");
+
+    // editor can issue pairing (bot unconfigured → 503 comes from env, not role)
+    const pairResult = await issueMemberPairing(editorDeps, member.id).catch((e) => (e as Error).message);
+    expect(pairResult).toBe("Telegram bot not configured");
+
+    // admin-only ops with an editor session → 403
+    const unlinkForbidden = await unlinkMemberRoute(editorDeps, member.id).catch((e) => (e as Error).message);
+    expect(unlinkForbidden).toBe("Admin role required");
+    const notifyForbidden = await setMemberNotifyRoute(editorDeps, member.id, true).catch((e) => (e as Error).message);
+    expect(notifyForbidden).toBe("Admin role required");
+
+    // admin session works (no telegram config needed for these two)
+    const adminDeps = { db, session: adminSession };
+    expect(await unlinkMemberRoute(adminDeps, member.id)).toEqual({ linked: false });
+    expect(await setMemberNotifyRoute(adminDeps, member.id, true)).toEqual({ notifyEnabled: true });
+    expect(await setMemberNotifyRoute(adminDeps, member.id, false)).toEqual({ notifyEnabled: false });
+
+    const statusBody = await memberTelegramStatus(adminDeps, member.id);
+    expect(statusBody.notifyEnabled).toBe(false);
+    expect(statusBody.linked).toBe(false);
+  });
+
+  test("binding a deleted member is rejected", async () => {
+    const member = await seedMember();
+    await db.member.update({ where: { id: member.id }, data: { deletedAt: new Date() } });
+    const issued = await issuePairingCode(db, { targetType: "member", targetId: member.id });
+    const consumed = await consumePairingCode(db, issued.code);
+    expect(await bindChat(db, consumed!, "400").catch(() => "rejected")).toBe("rejected");
   });
 });

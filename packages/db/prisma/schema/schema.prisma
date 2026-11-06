@@ -22,11 +22,17 @@ model Member {
   notes       String?
   status      String    @default("active") // active | inactive | exited
   exitDate    DateTime? @db.Date
+  // Telegram binding (receive-only notifications, #14). One chat per member.
+  telegramChatId   String?
+  telegramLinkedAt DateTime?
+  notifyEnabled    Boolean @default(true)
   deletedAt   DateTime?
   createdBy   String?
   updatedBy   String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
+  @@unique([telegramChatId])
 
   contributions  Contribution[]
   loans          Loan[]

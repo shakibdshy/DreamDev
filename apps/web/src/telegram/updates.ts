@@ -37,7 +37,11 @@ const PAIRING_INSTRUCTIONS = [
   "Codes come from the dashboard and expire in 15 minutes.",
 ].join("\n");
 
-const LINK_TAKEN = "⚠️ This Telegram account is already linked to another dashboard account. Unlink it there first.";
+const LINK_TAKEN = "⚠️ This Telegram account is already linked to another account. Unlink it first.";
+
+const MEMBER_WELCOME = "✅ Linked! You'll receive notifications about your fund records here.\n\nThis bot is notification-only — it can't reply to questions or commands.";
+
+const NOTIFICATION_ONLY = "This bot is notification-only. You'll receive messages about your fund records here, but it can't answer messages.";
 
 export class UpdateDeduper {
   private seen = new Set<number>();
@@ -69,7 +73,7 @@ export function createUpdateHandler(deps: { db: Database; client: TelegramClient
       }
       const consumed = await consumePairingCode(deps.db, code.toUpperCase());
       if (!consumed) {
-        await deps.client.sendMessage(chatId, "⚠️ That code is invalid, already used, or expired. Generate a fresh one in the dashboard (Settings → Connect Telegram).");
+        await deps.client.sendMessage(chatId, "⚠️ That code is invalid, already used, or expired. Ask for a fresh code.");
         return;
       }
       try {
@@ -78,12 +82,22 @@ export function createUpdateHandler(deps: { db: Database; client: TelegramClient
         await deps.client.sendMessage(chatId, LINK_TAKEN);
         return;
       }
-      const target = consumed.targetType === "user" ? await deps.db.user.findUnique({ where: { id: consumed.targetId } }) : null;
-      await deps.client.sendMessage(chatId, WELCOME_USER(target?.name ?? "there", (target?.role ?? "editor") === "admin" ? "Admin" : "Editor"));
+      if (consumed.targetType === "member") {
+        await deps.client.sendMessage(chatId, MEMBER_WELCOME);
+        return;
+      }
+      const user = await deps.db.user.findUnique({ where: { id: consumed.targetId } });
+      await deps.client.sendMessage(chatId, WELCOME_USER(user?.name ?? "there", user?.role === "admin" ? "Admin" : "Editor"));
       return;
     }
 
-    // Any other message: linked users get a placeholder, unknown chats instructions.
+    // Any other message: members are notification-only, linked users get the
+    // agent placeholder, unknown chats pairing instructions.
+    const member = await deps.db.member.findFirst({ where: { telegramChatId: chatId } });
+    if (member) {
+      await deps.client.sendMessage(chatId, NOTIFICATION_ONLY);
+      return;
+    }
     const linked = await deps.db.user.findFirst({ where: { telegramChatId: chatId } });
     if (linked) {
       await deps.client.sendMessage(chatId, "The fund assistant on Telegram is coming soon — meanwhile the dashboard chat is live on every page.");
