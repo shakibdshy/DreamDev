@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { BadgePercentIcon, CalculatorIcon, LockIcon, MonitorIcon, MoonIcon, PaletteIcon, SunIcon } from "lucide-react";
+import { BadgePercentIcon, CalculatorIcon, LockIcon, MonitorIcon, MoonIcon, PaletteIcon, SendIcon, SunIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
@@ -85,7 +85,7 @@ function SettingsPage() {
 
               {isAdmin ? (
                 <form
-                  className="flex flex-col gap-3 rounded-xl border border-border bg-muted/25 p-4 sm:flex-row sm:items-end"
+                  className="flex flex-col gap-1.5 rounded-xl border border-border bg-muted/25 p-4"
                   onSubmit={(event) => {
                     event.preventDefault();
                     const value = Number(price);
@@ -93,19 +93,22 @@ function SettingsPage() {
                     update.mutate(value);
                   }}
                 >
-                  <Field label="New price (৳/share/month)" htmlFor="price" hint="Applies from the current month forward." className="flex-1">
-                    <Input
-                      id="price"
-                      name="price"
-                      inputMode="numeric"
-                      placeholder={sharePrice !== undefined ? String(sharePrice) : "6000"}
-                      value={price}
-                      onChange={(event) => setPrice(event.target.value)}
-                    />
-                  </Field>
-                  <Button type="submit" disabled={update.isPending || !price || Number(price) <= 0} className="sm:mb-0.5">
-                    {update.isPending ? "Updating…" : "Update price"}
-                  </Button>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <Field label="New price (৳/share/month)" htmlFor="price" className="flex-1">
+                      <Input
+                        id="price"
+                        name="price"
+                        inputMode="numeric"
+                        placeholder={sharePrice !== undefined ? String(sharePrice) : "6000"}
+                        value={price}
+                        onChange={(event) => setPrice(event.target.value)}
+                      />
+                    </Field>
+                    <Button type="submit" disabled={update.isPending || !price || Number(price) <= 0}>
+                      {update.isPending ? "Updating…" : "Update price"}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Applies from the current month forward.</p>
                 </form>
               ) : (
                 <p className="rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground">
@@ -156,6 +159,7 @@ function SettingsPage() {
 
         <div className="flex flex-col gap-6">
           <AppearanceCard />
+          <TelegramCard />
           <Card>
             <CardHeader>
               <CardTitle>Fund rules of thumb</CardTitle>
@@ -233,6 +237,106 @@ function AppearanceCard() {
           <PaletteIcon className="size-3.5" aria-hidden />
           The choice is remembered on this device.
         </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+interface TelegramStatus {
+  configured: boolean;
+  linked: boolean;
+  linkedAt: string | null;
+}
+
+/** Connect Telegram (ticket 1/8): issue a deep link, show the code, unlink. */
+function TelegramCard() {
+  const queryClient = useQueryClient();
+  const [pairing, setPairing] = useState<{ code: string; deepLink: string; expiresAt: string } | null>(null);
+
+  const statusQuery = useQuery({
+    queryKey: ["telegram-status"],
+    queryFn: () => api<TelegramStatus>("/api/telegram/status"),
+  });
+
+  const connect = useMutation({
+    mutationFn: () => api<{ code: string; deepLink: string; expiresAt: string }>("/api/telegram/pair", { method: "POST" }),
+    onSuccess: setPairing,
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const unlink = useMutation({
+    mutationFn: () => api<{ linked: false }>("/api/telegram/pair", { method: "DELETE" }),
+    onSuccess: () => {
+      setPairing(null);
+      toast.success("Telegram unlinked");
+      void queryClient.invalidateQueries({ queryKey: ["telegram-status"] });
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const status = statusQuery.data;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Telegram</CardTitle>
+        <CardDescription>Get fund assistant chat and notifications in Telegram.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4 text-sm">
+        {status && !status.configured ? (
+          <p className="text-muted-foreground">
+            The Telegram bot isn&rsquo;t configured on this deployment yet. Ask the administrator to set the bot token.
+          </p>
+        ) : status?.linked ? (
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="flex items-center gap-2 font-medium">
+                <SendIcon className="size-4 text-primary" aria-hidden />
+                Linked
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                since {status.linkedAt ? new Date(status.linkedAt).toLocaleString() : "…"}
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => unlink.mutate()} disabled={unlink.isPending}>
+              Unlink
+            </Button>
+          </div>
+        ) : pairing ? (
+          <div className="flex flex-col gap-3">
+            <p className="text-muted-foreground">Send this code to the bot within 15 minutes — the link below opens the chat with it pre-filled.</p>
+            <div className="flex items-center gap-2">
+              <code className="rounded-lg bg-muted px-3 py-1.5 font-mono text-base tracking-[0.2em]">{pairing.code}</code>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  void navigator.clipboard.writeText(pairing.code);
+                  toast.success("Code copied");
+                }}
+              >
+                Copy
+              </Button>
+            </div>
+            <a
+              href={pairing.deepLink}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-primary px-3.5 text-sm font-medium text-primary-foreground shadow-xs transition-colors hover:bg-primary/88"
+            >
+              <SendIcon className="size-4" aria-hidden />
+              Open in Telegram
+            </a>
+            <Button variant="ghost" size="sm" onClick={() => void queryClient.invalidateQueries({ queryKey: ["telegram-status"] })}>
+              I&rsquo;ve sent it — refresh status
+            </Button>
+          </div>
+        ) : (
+          <Button onClick={() => connect.mutate()} disabled={connect.isPending} className="self-start">
+            <SendIcon className="size-4" aria-hidden />
+            Connect Telegram
+          </Button>
+        )}
       </CardContent>
     </Card>
   );

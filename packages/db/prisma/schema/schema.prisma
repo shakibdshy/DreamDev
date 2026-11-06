@@ -256,3 +256,19 @@ model AgentMessage {
   @@index([conversationId, createdAt])
   @@map("agent_message")
 }
+
+// Single-use deep-link pairing codes binding a Telegram chat to a dashboard
+// User or a Member (#14). 15-minute TTL; consumed on /start.
+model TelegramPairingCode {
+  id         String    @id @default(uuid())
+  code       String    @unique
+  targetType String // user | member
+  targetId   String
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdBy  String?
+  createdAt  DateTime  @default(now())
+
+  @@index([targetType, targetId])
+  @@map("telegram_pairing_code")
+}

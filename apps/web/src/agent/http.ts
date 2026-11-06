@@ -3,7 +3,7 @@ import { openaiCompatibleText } from "@tanstack/ai-openai/compatible";
 
 import type { Session } from "@DreamDev/auth";
 
-import { ENV } from "@/env.server";
+import { optionalEnv } from "@/env-optional";
 
 import { agentStream, createRateLimiter, ensureConversation, messageText, RateLimitError } from "./agent";
 import type { AgentContext } from "./context";
@@ -16,11 +16,10 @@ const DEFAULT_THREAD = (channel: string, userId: string) => `${channel}-${userId
 
 /** The GLM adapter from env; undefined = agent disabled (everything else works). */
 export function envAgentAdapter(): AnyTextAdapter | undefined {
-  if (!ENV.AGENT_API_KEY || !ENV.AGENT_BASE_URL) return undefined;
-  return openaiCompatibleText(ENV.AGENT_MODEL || "glm-5.3-flash", {
-    baseURL: ENV.AGENT_BASE_URL,
-    apiKey: ENV.AGENT_API_KEY,
-  });
+  const apiKey = optionalEnv("AGENT_API_KEY");
+  const baseURL = optionalEnv("AGENT_BASE_URL");
+  if (!apiKey || !baseURL) return undefined;
+  return openaiCompatibleText(optionalEnv("AGENT_MODEL") || "glm-5.3-flash", { baseURL, apiKey });
 }
 
 export interface AgentApiOptions {
