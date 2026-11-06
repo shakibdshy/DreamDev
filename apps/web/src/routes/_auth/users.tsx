@@ -1,23 +1,32 @@
-import {
-  createColumnHelper,
-  flexRender,
-  getCoreRowModel,
-  useReactTable,
-} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useForm } from "@tanstack/react-form";
+import { KeyRoundIcon, MoreHorizontalIcon, PlusIcon, ShieldCheckIcon, ShieldOffIcon, UserCogIcon } from "lucide-react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { z } from "zod";
 
+import { Badge } from "@DreamDev/ui/components/badge";
 import { Button } from "@DreamDev/ui/components/button";
+import { Card } from "@DreamDev/ui/components/card";
+import { Avatar, AvatarFallback } from "@DreamDev/ui/components/avatar";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@DreamDev/ui/components/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@DreamDev/ui/components/dropdown-menu";
 import { Input } from "@DreamDev/ui/components/input";
-import { Label } from "@DreamDev/ui/components/label";
+import { NativeSelect } from "@DreamDev/ui/components/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@DreamDev/ui/components/table";
+import { Skeleton } from "@DreamDev/ui/components/skeleton";
 
-import { api } from "@/lib/api";
 import { listUsersQuerySchema } from "@/api/users/schema";
-
 import type { UserListItem } from "@/api/users/service";
+import { EmptyState } from "@/components/empty-state";
+import { Field } from "@/components/field";
+import { PageHeader } from "@/components/page-header";
+import { Pagination } from "@/components/pagination";
+import { StatusBadge } from "@/components/status-badge";
+import { api } from "@/lib/api";
+import { firstError } from "@/lib/form-errors";
+import { formatDateTime, formatDay, initials } from "@/lib/format";
 
 /** Wire shape: dates arrive as ISO strings over JSON. */
 interface UserRowData extends Omit<UserListItem, "createdAt" | "lastSignInAt"> {
@@ -43,128 +52,193 @@ function UsersPage() {
   const navigate = Route.useNavigate();
   const { session } = Route.useRouteContext();
   const isAdmin = session?.user.role === "admin" && session.user.status === "active";
+  const currentUserId = session?.user.id;
+
+  const [createOpen, setCreateOpen] = useState(false);
+  const [resetting, setResetting] = useState<UserRowData | null>(null);
 
   const usersQuery = useQuery({
     queryKey: ["users", search],
     queryFn: () =>
       api<UsersResponse>(
-        `/api/users?${new URLSearchParams(
-          Object.entries(search).map(([key, value]) => [key, String(value)] as [string, string]),
-        )}`,
+        `/api/users?${new URLSearchParams(Object.entries(search).map(([key, value]) => [key, String(value)] as [string, string]))}`,
       ),
     enabled: isAdmin,
   });
 
-  const columnHelper = createColumnHelper<UserRowData>();
-  const columns = [
-    columnHelper.accessor("name", { header: "Name" }),
-    columnHelper.accessor("email", { header: "Email" }),
-    columnHelper.accessor("role", { header: "Role" }),
-    columnHelper.accessor("status", { header: "Status" }),
-    columnHelper.accessor("lastSignInAt", {
-      header: "Last sign-in",
-      cell: (info) => {
-        const value = info.getValue();
-        return value ? new Date(value).toLocaleString() : "—";
-      },
-    }),
-    columnHelper.accessor("createdAt", {
-      header: "Created",
-      cell: (info) => new Date(info.getValue()).toLocaleDateString(),
-    }),
-  ];
-
-  const table = useReactTable({
-    data: usersQuery.data?.data ?? [],
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    manualPagination: true,
-    pageCount: Math.ceil((usersQuery.data?.meta.total ?? 0) / search.pageSize),
-  });
-
   if (!isAdmin) {
-    return <p className="p-4 text-muted-foreground">Only Admins can manage Users.</p>;
+    return (
+      <div className="mx-auto w-full max-w-3xl">
+        <EmptyState
+          icon={ShieldOffIcon}
+          title="Admins only"
+          description="User management is restricted to administrators. Ask an admin if you need access."
+        />
+      </div>
+    );
   }
 
+  const rows = usersQuery.data?.data ?? [];
+  const meta = usersQuery.data?.meta;
+
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-4 p-4">
-      <h1 className="text-2xl font-semibold">Users</h1>
+    <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-8">
+      <PageHeader
+        eyebrow="Administration"
+        title="Users"
+        description="Who can sign in to the fund, and what they are allowed to do."
+        actions={
+          <Button onClick={() => setCreateOpen(true)} className="gap-2">
+            <PlusIcon className="size-4" />
+            Add user
+          </Button>
+        }
+      />
 
-      <CreateUserForm />
-
-      <div className="overflow-x-auto rounded-md border">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50">
-            {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <th key={header.id} className="px-3 py-2 text-left font-medium">
-                    {flexRender(header.column.columnDef.header, header.getContext())}
-                  </th>
-                ))}
-                <th className="px-3 py-2" />
-              </tr>
+      <Card>
+        {usersQuery.isLoading ? (
+          <div className="flex flex-col gap-2 p-5">
+            {Array.from({ length: 5 }, (_, index) => (
+              <Skeleton key={index} className="h-14 w-full rounded-lg" />
             ))}
-          </thead>
-          <tbody>
-            {usersQuery.isLoading ? (
-              <tr>
-                <td colSpan={columns.length + 1} className="px-3 py-6 text-center text-muted-foreground">
-                  Loading…
-                </td>
-              </tr>
-            ) : (
-              table.getRowModel().rows.map((row) => (
-                <UserRow key={row.original.id} user={row.original}>
-                  {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-3 py-2">
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
+          </div>
+        ) : rows.length > 0 ? (
+          <>
+            <div className="hidden lg:block">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>User</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Last sign-in</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="w-12">
+                      <span className="sr-only">Actions</span>
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((user) => (
+                    <UserRow
+                      key={user.id}
+                      user={user}
+                      isSelf={user.id === currentUserId}
+                      onResetPassword={() => setResetting(user)}
+                    />
                   ))}
-                </UserRow>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+                </TableBody>
+              </Table>
+            </div>
 
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {usersQuery.data ? `${usersQuery.data.meta.total} user${usersQuery.data.meta.total === 1 ? "" : "s"}` : ""}
-        </p>
-        <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={search.page <= 1}
-            onClick={() => navigate({ search: (prev) => ({ ...prev, page: prev.page - 1 }) })}
-          >
-            Previous
-          </Button>
-          <span className="text-sm text-muted-foreground">{search.page}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!usersQuery.data || search.page * search.pageSize >= usersQuery.data.meta.total}
-            onClick={() => navigate({ search: (prev) => ({ ...prev, page: prev.page + 1 }) })}
-          >
-            Next
-          </Button>
-        </div>
-      </div>
+            <ul className="divide-y divide-border/70 lg:hidden">
+              {rows.map((user) => {
+                const isSelf = user.id === currentUserId;
+                return (
+                  <li key={user.id} className="flex items-start gap-3 px-4 py-4">
+                    <Avatar className="size-10">
+                      <AvatarFallback>{initials(user.name)}</AvatarFallback>
+                    </Avatar>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-medium">
+                        {user.name}
+                        {isSelf && <span className="ml-2 text-xs text-muted-foreground">(you)</span>}
+                      </p>
+                      <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <Badge variant={user.role === "admin" ? "default" : "secondary"} className="capitalize">
+                          {user.role}
+                        </Badge>
+                        <StatusBadge status={user.status} />
+                      </div>
+                      <p className="mt-2 text-[11px] text-muted-foreground">
+                        {user.lastSignInAt ? `Last sign-in ${formatDateTime(user.lastSignInAt)}` : "Never signed in"} · Created{" "}
+                        {formatDay(user.createdAt)}
+                      </p>
+                    </div>
+                    <UserActions user={user} isSelf={isSelf} onResetPassword={() => setResetting(user)} />
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        ) : (
+          <div className="p-5">
+            <EmptyState
+              icon={UserCogIcon}
+              title="No users yet"
+              description="Invite a teammate by creating an account and choosing their role."
+              action={
+                <Button onClick={() => setCreateOpen(true)} className="gap-2">
+                  <PlusIcon className="size-4" />
+                  Add user
+                </Button>
+              }
+            />
+          </div>
+        )}
+
+        {rows.length > 0 && (
+          <Pagination
+            page={search.page}
+            pageSize={search.pageSize}
+            total={meta?.total}
+            hasNext={meta ? search.page * search.pageSize < meta.total : undefined}
+            onPrevious={() => navigate({ search: (prev) => ({ ...prev, page: prev.page - 1 }) })}
+            onNext={() => navigate({ search: (prev) => ({ ...prev, page: prev.page + 1 }) })}
+          />
+        )}
+      </Card>
+
+      <CreateUserDialog open={createOpen} onOpenChange={setCreateOpen} />
+      <ResetPasswordDialog user={resetting} onClose={() => setResetting(null)} />
     </div>
   );
 }
 
-function UserRow({ user, children }: { user: UserRowData; children: React.ReactNode }) {
+function UserRow({ user, isSelf, onResetPassword }: { user: UserRowData; isSelf: boolean; onResetPassword: () => void }) {
+  return (
+    <TableRow>
+      <TableCell>
+        <div className="flex items-center gap-3">
+          <Avatar className="size-9">
+            <AvatarFallback>{initials(user.name)}</AvatarFallback>
+          </Avatar>
+          <div className="min-w-0">
+            <p className="truncate font-medium">
+              {user.name}
+              {isSelf && <span className="ml-2 text-xs text-muted-foreground">(you)</span>}
+            </p>
+            <p className="truncate text-xs text-muted-foreground">{user.email}</p>
+          </div>
+        </div>
+      </TableCell>
+      <TableCell>
+        <Badge variant={user.role === "admin" ? "default" : "secondary"} className="capitalize">
+          {user.role}
+        </Badge>
+      </TableCell>
+      <TableCell>
+        <StatusBadge status={user.status} />
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-muted-foreground">{user.lastSignInAt ? formatDateTime(user.lastSignInAt) : "Never"}</TableCell>
+      <TableCell className="whitespace-nowrap text-muted-foreground">{formatDay(user.createdAt)}</TableCell>
+      <TableCell className="text-right">
+        <UserActions user={user} isSelf={isSelf} onResetPassword={onResetPassword} />
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function UserActions({ user, isSelf, onResetPassword }: { user: UserRowData; isSelf: boolean; onResetPassword: () => void }) {
   const queryClient = useQueryClient();
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["users"] });
 
   const act = useMutation({
     mutationFn: ({ path, body }: { path: string; body?: unknown }) =>
       api(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
-    onSuccess: () => {
-      toast.success("Done");
+    onSuccess: (_result, vars) => {
+      toast.success(vars.path.endsWith("deactivate") ? "User deactivated" : "User reactivated");
       invalidate();
     },
     onError: (error: Error) => toast.error(error.message),
@@ -172,47 +246,46 @@ function UserRow({ user, children }: { user: UserRowData; children: React.ReactN
 
   const patch = useMutation({
     mutationFn: (body: unknown) => api(`/api/users/${user.id}`, { method: "PATCH", body: JSON.stringify(body) }),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      toast.success("Role updated");
+      invalidate();
+    },
     onError: (error: Error) => toast.error(error.message),
   });
 
-  const onResetPassword = () => {
-    const newPassword = window.prompt(`New password for ${user.name} (min 8 characters)`);
-    if (!newPassword) return;
-    act.mutate({ path: `/api/users/${user.id}/reset-password`, body: { newPassword } });
-  };
-
   return (
-    <tr className="border-t">
-      {children}
-      <td className="px-3 py-2 text-right whitespace-nowrap">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => patch.mutate({ role: user.role === "admin" ? "editor" : "admin" })}
-        >
-          Make {user.role === "admin" ? "Editor" : "Admin"}
-        </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={`Actions for ${user.name}`} />}>
+        <MoreHorizontalIcon className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem disabled={isSelf} onClick={() => patch.mutate({ role: user.role === "admin" ? "editor" : "admin" })}>
+          <ShieldCheckIcon />
+          Make {user.role === "admin" ? "editor" : "admin"}
+        </DropdownMenuItem>
         {user.status === "active" ? (
-          <Button variant="ghost" size="sm" onClick={() => act.mutate({ path: `/api/users/${user.id}/deactivate` })}>
+          <DropdownMenuItem disabled={isSelf} onClick={() => act.mutate({ path: `/api/users/${user.id}/deactivate` })}>
+            <ShieldOffIcon />
             Deactivate
-          </Button>
+          </DropdownMenuItem>
         ) : (
-          <Button variant="ghost" size="sm" onClick={() => act.mutate({ path: `/api/users/${user.id}/reactivate` })}>
+          <DropdownMenuItem onClick={() => act.mutate({ path: `/api/users/${user.id}/reactivate` })}>
+            <ShieldCheckIcon />
             Reactivate
-          </Button>
+          </DropdownMenuItem>
         )}
-        <Button variant="ghost" size="sm" onClick={onResetPassword}>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={onResetPassword}>
+          <KeyRoundIcon />
           Reset password…
-        </Button>
-      </td>
-    </tr>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
-function CreateUserForm() {
+function CreateUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const queryClient = useQueryClient();
-
   const form = useForm({
     defaultValues: { name: "", email: "", password: "", role: "editor" as "admin" | "editor" },
     onSubmit: async ({ value }) => {
@@ -220,6 +293,7 @@ function CreateUserForm() {
         await api("/api/users", { method: "POST", body: JSON.stringify(value) });
         toast.success(`Created ${value.name}`);
         form.reset();
+        onOpenChange(false);
         await queryClient.invalidateQueries({ queryKey: ["users"] });
       } catch (error) {
         toast.error((error as Error).message);
@@ -228,84 +302,138 @@ function CreateUserForm() {
   });
 
   return (
-    <details className="rounded-md border p-3">
-      <summary className="cursor-pointer font-medium">New User</summary>
-      <form
-        className="mt-3 grid gap-3 sm:grid-cols-2"
-        onSubmit={(e) => {
-          e.preventDefault();
-          form.handleSubmit();
-        }}
-      >
-        <form.Field
-          name="name"
-          validators={{ onChange: z.string().trim().min(1, "Name is required") }}
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add a user</DialogTitle>
+          <DialogDescription>Create credentials and choose whether they can administer the fund.</DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault();
+            form.handleSubmit();
+          }}
         >
-          {(field) => (
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="new-user-name">Name</Label>
-              <Input id="new-user-name" value={field.state.value} onBlur={field.handleBlur} onChange={(e) => field.handleChange(e.target.value)} />
-              <FieldError errors={field.state.meta.errors} />
-            </div>
-          )}
-        </form.Field>
-
-        <form.Field name="email" validators={{ onChange: z.email("A valid email is required") }}>
-          {(field) => (
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="new-user-email">Email</Label>
-              <Input id="new-user-email" type="email" value={field.state.value} onBlur={field.handleBlur} onChange={(e) => field.handleChange(e.target.value)} />
-              <FieldError errors={field.state.meta.errors} />
-            </div>
-          )}
-        </form.Field>
-
-        <form.Field name="password" validators={{ onChange: z.string().min(8, "At least 8 characters") }}>
-          {(field) => (
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="new-user-password">Password</Label>
-              <Input id="new-user-password" type="password" value={field.state.value} onBlur={field.handleBlur} onChange={(e) => field.handleChange(e.target.value)} />
-              <FieldError errors={field.state.meta.errors} />
-            </div>
-          )}
-        </form.Field>
-
-        <form.Field name="role">
-          {(field) => (
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="new-user-role">Role</Label>
-              <select
-                id="new-user-role"
-                className="h-9 rounded-md border bg-transparent px-3"
-                value={field.state.value}
-                onChange={(e) => field.handleChange(e.target.value as "admin" | "editor")}
-              >
-                <option value="editor">Editor</option>
-                <option value="admin">Admin</option>
-              </select>
-              <FieldError errors={field.state.meta.errors} />
-            </div>
-          )}
-        </form.Field>
-
-        <div className="sm:col-span-2">
-          <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
-            {([canSubmit, isSubmitting]) => (
-              <Button type="submit" disabled={!canSubmit || isSubmitting}>
-                {isSubmitting ? "Creating…" : "Create User"}
-              </Button>
+          <form.Field name="name" validators={{ onChange: z.string().trim().min(1, "Name is required") }}>
+            {(field) => (
+              <Field label="Name" htmlFor="new-user-name" required error={firstError(field.state.meta.errors)}>
+                <Input id="new-user-name" autoComplete="name" value={field.state.value} onBlur={field.handleBlur} onChange={(event) => field.handleChange(event.target.value)} />
+              </Field>
             )}
-          </form.Subscribe>
-        </div>
-      </form>
-    </details>
+          </form.Field>
+
+          <form.Field name="email" validators={{ onChange: z.email("A valid email is required") }}>
+            {(field) => (
+              <Field label="Email" htmlFor="new-user-email" required error={firstError(field.state.meta.errors)}>
+                <Input
+                  id="new-user-email"
+                  type="email"
+                  autoComplete="email"
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                />
+              </Field>
+            )}
+          </form.Field>
+
+          <form.Field name="password" validators={{ onChange: z.string().min(8, "At least 8 characters") }}>
+            {(field) => (
+              <Field label="Temporary password" htmlFor="new-user-password" required error={firstError(field.state.meta.errors)} hint="At least 8 characters.">
+                <Input
+                  id="new-user-password"
+                  type="password"
+                  autoComplete="new-password"
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                />
+              </Field>
+            )}
+          </form.Field>
+
+          <form.Field name="role">
+            {(field) => (
+              <Field label="Role" htmlFor="new-user-role" hint="Admins manage users, pricing and adjustments.">
+                <NativeSelect
+                  id="new-user-role"
+                  value={field.state.value}
+                  onChange={(event) => field.handleChange(event.target.value as "admin" | "editor")}
+                >
+                  <option value="editor">Editor</option>
+                  <option value="admin">Admin</option>
+                </NativeSelect>
+              </Field>
+            )}
+          </form.Field>
+
+          <DialogFooter className="sm:col-span-2">
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <form.Subscribe selector={(state) => [state.canSubmit, state.isSubmitting]}>
+              {([canSubmit, isSubmitting]) => (
+                <Button type="submit" disabled={!canSubmit || isSubmitting}>
+                  {isSubmitting ? "Creating…" : "Create user"}
+                </Button>
+              )}
+            </form.Subscribe>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
-function FieldError({ errors }: { errors: unknown[] }) {
-  const message = errors[0] && typeof errors[0] === "object" && "message" in errors[0]
-    ? String((errors[0] as { message: string }).message)
-    : undefined;
-  if (!message) return null;
-  return <p className="text-xs text-destructive">{message}</p>;
+function ResetPasswordDialog({ user, onClose }: { user: UserRowData | null; onClose: () => void }) {
+  const [password, setPassword] = useState("");
+  const reset = useMutation({
+    mutationFn: (newPassword: string) =>
+      api(`/api/users/${user?.id}/reset-password`, { method: "POST", body: JSON.stringify({ newPassword }) }),
+    onSuccess: () => {
+      toast.success("Password reset");
+      setPassword("");
+      onClose();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  return (
+    <Dialog open={Boolean(user)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent key={user?.id ?? "none"} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Reset password</DialogTitle>
+          <DialogDescription>{user ? `Set a new password for ${user.name} (${user.email}). Share it with them securely.` : ""}</DialogDescription>
+        </DialogHeader>
+        <form
+          className="grid grid-cols-1 gap-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (password.length >= 8) reset.mutate(password);
+          }}
+        >
+          <Field label="New password" htmlFor="reset-password" hint="At least 8 characters.">
+            <Input
+              id="reset-password"
+              type="password"
+              autoComplete="new-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoFocus
+            />
+          </Field>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={reset.isPending || password.length < 8}>
+              {reset.isPending ? "Resetting…" : "Reset password"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 }

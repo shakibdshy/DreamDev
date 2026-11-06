@@ -1,3 +1,4 @@
+import { NativeSelect } from "@DreamDev/ui/components/native-select";
 import { useQuery } from "@tanstack/react-query";
 
 import { formatTaka } from "@DreamDev/db/domain/money";
@@ -27,12 +28,11 @@ export function BankSelect({
   });
 
   return (
-    <select
+    <NativeSelect
       id={id}
-      className="h-9 rounded-md border bg-transparent px-3"
       value={value}
       disabled={disabled || banksQuery.isLoading}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={(event) => onChange(event.target.value)}
     >
       <option value="">{banksQuery.isLoading ? "Loading accounts…" : "Select a Bank Account"}</option>
       {banksQuery.data?.data.map((bank) => (
@@ -40,6 +40,6 @@ export function BankSelect({
           {bank.bankName} — {formatTaka(bank.currentBalance)}
         </option>
       ))}
-    </select>
+    </NativeSelect>
   );
 }

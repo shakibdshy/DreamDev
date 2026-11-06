@@ -1,3 +1,4 @@
+import { NativeSelect } from "@DreamDev/ui/components/native-select";
 import { useQuery } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
@@ -22,19 +23,13 @@ export function MemberSelect({
   });
 
   return (
-    <select
-      id={id}
-      className="h-9 rounded-md border bg-transparent px-3"
-      value={value}
-      disabled={membersQuery.isLoading}
-      onChange={(e) => onChange(e.target.value)}
-    >
+    <NativeSelect id={id} value={value} disabled={membersQuery.isLoading} onChange={(event) => onChange(event.target.value)}>
       <option value="">{membersQuery.isLoading ? "Loading members…" : "Select a Member"}</option>
       {membersQuery.data?.data.map((member) => (
         <option key={member.id} value={member.id}>
           {member.name} ({member.mobile}){member.status !== "active" ? ` — ${member.status}` : ""}
         </option>
       ))}
-    </select>
+    </NativeSelect>
   );
 }
