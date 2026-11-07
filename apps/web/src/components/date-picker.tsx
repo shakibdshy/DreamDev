@@ -18,9 +18,16 @@ export type DatePickerProps = {
   placeholder?: string;
   clearable?: boolean;
   className?: string;
+  /** Latest selectable day, YYYY-MM-DD — record forms pass todayInDhaka(). */
+  max?: string;
   "aria-invalid"?: boolean;
   "aria-describedby"?: string;
 };
+
+/** True when `value` is a well-formed date after today (Asia/Dhaka). */
+export function isFutureDate(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) && value > todayInDhaka();
+}
 
 /** A ledger day is a local calendar date, not a UTC timestamp. */
 export function parseCalendarDate(value: string): Date | undefined {
@@ -62,6 +69,7 @@ export function DatePicker({
   placeholder = "Pick a date",
   clearable = true,
   className,
+  max,
   "aria-invalid": ariaInvalid,
   "aria-describedby": ariaDescribedBy,
 }: DatePickerProps) {
@@ -69,9 +77,12 @@ export function DatePicker({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const selected = parseCalendarDate(value);
   const today = parseCalendarDate(todayInDhaka())!;
+  const maxDate = max ? parseCalendarDate(max) : undefined;
   const startMonth = new Date(1900, 0, 1);
   if (selected && selected < startMonth) startMonth.setFullYear(selected.getFullYear());
-  const endMonth = new Date(Math.max(today.getFullYear() + 100, selected?.getFullYear() ?? 0), 11, 31);
+  const endMonth = maxDate
+    ? new Date(Math.max(maxDate.getFullYear(), selected?.getFullYear() ?? 0), 11, 31)
+    : new Date(Math.max(today.getFullYear() + 100, selected?.getFullYear() ?? 0), 11, 31);
 
   // A portalled calendar must also honor its trigger's disabled fieldset.
   useEffect(() => {
@@ -151,6 +162,7 @@ export function DatePicker({
           captionLayout="dropdown"
           startMonth={startMonth}
           endMonth={endMonth}
+          disabled={maxDate ? [{ after: maxDate }] : undefined}
           autoFocus
           onSelect={changeDate}
         />

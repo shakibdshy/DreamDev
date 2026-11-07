@@ -11,7 +11,7 @@ import { NativeSelect } from "@DreamDev/ui/components/native-select";
 
 import type { LoanView } from "@/api/loans/service";
 import { BankSelect } from "@/components/bank-select";
-import { DatePicker } from "@/components/date-picker";
+import { DatePicker, isFutureDate } from "@/components/date-picker";
 import { Field } from "@/components/field";
 import { MemberSelect } from "@/components/member-select";
 import { api } from "@/lib/api";
@@ -74,7 +74,11 @@ function RepaymentForm({ memberId, loanId, onDone }: LoanRepaymentFormProps) {
         ? `Cannot exceed the remaining balance of ${formatTaka(selectedLoan.outstanding)}.`
         : undefined;
   const showAmountError = amountTouched && Boolean(amountError);
-  const dateError = validCreditDate(creditDate) ? undefined : "Choose a valid credit date.";
+  const dateError = !validCreditDate(creditDate)
+    ? "Choose a valid credit date."
+    : isFutureDate(creditDate)
+      ? "Credit date can't be in the future."
+      : undefined;
 
   const repay = useMutation({
     mutationFn: ({ loanId: repaymentLoanId, amount, bankAccountId, creditDate }: RepaymentInput) =>
@@ -228,6 +232,7 @@ function RepaymentForm({ memberId, loanId, onDone }: LoanRepaymentFormProps) {
                   <DatePicker
                     id={`${id}-date`}
                     required
+                    max={todayInDhaka()}
                     value={creditDate}
                     aria-invalid={Boolean(dateError)}
                     aria-describedby={dateError ? `${id}-date-error` : undefined}

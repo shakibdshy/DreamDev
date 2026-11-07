@@ -11,7 +11,7 @@ import { Input } from "@DreamDev/ui/components/input";
 import { Textarea } from "@DreamDev/ui/components/textarea";
 
 import { bdMobile } from "@/api/members/schema";
-import { DatePicker } from "@/components/date-picker";
+import { DatePicker, isFutureDate } from "@/components/date-picker";
 import { Field } from "@/components/field";
 import { api } from "@/lib/api";
 
@@ -125,9 +125,14 @@ function EditMemberForm({ member, pending, onCancel, onSubmit }: { member: Membe
   const [notes, setNotes] = useState(member.notes ?? "");
   const nameError = name.trim() ? undefined : "Name is required";
   const mobileError = bdMobile.test(mobile.trim()) ? undefined : "Enter a valid BD mobile (01XXXXXXXXX)";
+  const joiningError = !joiningDate
+    ? "Joining date is required"
+    : isFutureDate(joiningDate)
+      ? "Joining date can't be in the future."
+      : undefined;
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (pending || nameError || mobileError || !joiningDate) return;
+    if (pending || nameError || mobileError || joiningError) return;
     onSubmit({ name: name.trim(), mobile: mobile.trim(), joiningDate, address: address.trim() || null, notes: notes.trim() || null });
   };
   return (
@@ -139,8 +144,8 @@ function EditMemberForm({ member, pending, onCancel, onSubmit }: { member: Membe
         <Field label="Mobile" htmlFor={`${id}-mobile`} required error={mobileError}>
           <Input id={`${id}-mobile`} value={mobile} onChange={(e) => setMobile(e.target.value)} inputMode="tel" autoComplete="tel-national" aria-invalid={Boolean(mobileError)} />
         </Field>
-        <Field label="Joining date" htmlFor={`${id}-joined`} required hint="Changing this date recalculates billing from the joining month.">
-          <DatePicker id={`${id}-joined`} value={joiningDate} onChange={setJoiningDate} required disabled={pending} />
+        <Field label="Joining date" htmlFor={`${id}-joined`} required hint="Changing this date recalculates billing from the joining month." error={joiningError}>
+          <DatePicker id={`${id}-joined`} value={joiningDate} onChange={setJoiningDate} required max={todayInDhaka()} disabled={pending} />
         </Field>
         <Field label="Address" htmlFor={`${id}-address`} hint="Optional">
           <Input id={`${id}-address`} value={address} onChange={(e) => setAddress(e.target.value)} autoComplete="street-address" />
@@ -150,7 +155,7 @@ function EditMemberForm({ member, pending, onCancel, onSubmit }: { member: Membe
         </Field>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-          <Button type="submit" disabled={pending || Boolean(nameError) || Boolean(mobileError) || !joiningDate}>{pending ? "Saving…" : "Save changes"}</Button>
+          <Button type="submit" disabled={pending || Boolean(nameError) || Boolean(mobileError) || Boolean(joiningError)}>{pending ? "Saving…" : "Save changes"}</Button>
         </DialogFooter>
       </fieldset>
     </form>
@@ -161,18 +166,19 @@ function MembershipForm({ action, pending, onCancel, onSubmit }: { action: "acti
   const id = useId();
   const [date, setDate] = useState(todayInDhaka());
   const [note, setNote] = useState("");
+  const dateError = !date ? "Effective date is required" : isFutureDate(date) ? "Effective date can't be in the future." : undefined;
   return (
-    <form onSubmit={(event) => { event.preventDefault(); if (!pending && date) onSubmit({ status: action, date, note: note.trim() || undefined }); }}>
+    <form onSubmit={(event) => { event.preventDefault(); if (!pending && !dateError) onSubmit({ status: action, date, note: note.trim() || undefined }); }}>
       <fieldset disabled={pending} className="flex flex-col gap-4">
-        <Field label="Effective date" htmlFor={`${id}-date`} required>
-          <DatePicker id={`${id}-date`} value={date} onChange={setDate} required disabled={pending} />
+        <Field label="Effective date" htmlFor={`${id}-date`} required error={dateError}>
+          <DatePicker id={`${id}-date`} value={date} onChange={setDate} required max={todayInDhaka()} disabled={pending} />
         </Field>
         <Field label="Note" htmlFor={`${id}-note`} hint="Optional">
           <Input id={`${id}-note`} value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onCancel}>Cancel</Button>
-          <Button type="submit" variant={action === "exited" ? "destructive" : "default"} disabled={pending || !date}>{pending ? "Saving…" : actionLabels[action]}</Button>
+          <Button type="submit" variant={action === "exited" ? "destructive" : "default"} disabled={pending || Boolean(dateError)}>{pending ? "Saving…" : actionLabels[action]}</Button>
         </DialogFooter>
       </fieldset>
     </form>

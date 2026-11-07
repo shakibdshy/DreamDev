@@ -20,7 +20,7 @@ import { cn } from "@DreamDev/ui/lib/utils";
 import { FEED_TYPES, listFeedQuerySchema } from "@/api/transactions/schema";
 import { Amount } from "@/components/amount";
 import { BankSelect, useBankBalance } from "@/components/bank-select";
-import { DatePicker } from "@/components/date-picker";
+import { DatePicker, isFutureDate } from "@/components/date-picker";
 import { EmptyState } from "@/components/empty-state";
 import { Field } from "@/components/field";
 import { LoanRepaymentForm } from "@/components/loan-repayment-form";
@@ -533,6 +533,10 @@ function ExpenseForm({ onDone }: { onDone: () => void }) {
       className="grid grid-cols-1 gap-4 sm:grid-cols-2"
       onSubmit={async (event) => {
         event.preventDefault();
+        if (isFutureDate(date)) {
+          toast.error("Date can't be in the future");
+          return;
+        }
         try {
           await create.mutateAsync({ bankAccountId, amount: Number(amount), date, note: note || undefined });
           onDone();
@@ -554,7 +558,7 @@ function ExpenseForm({ onDone }: { onDone: () => void }) {
         <Input id="expense-amount" inputMode="numeric" placeholder="0" value={amount} onChange={(event) => setAmount(event.target.value)} />
       </Field>
       <Field label="Date" htmlFor="expense-date" required>
-        <DatePicker id="expense-date" required value={date} onChange={setDate} disabled={create.isPending} />
+        <DatePicker id="expense-date" required max={todayInDhaka()} value={date} onChange={setDate} disabled={create.isPending} />
       </Field>
       <Field label="Note" htmlFor="expense-note" hint="Optional">
         <Input id="expense-note" value={note} onChange={(event) => setNote(event.target.value)} placeholder="Bank charges, cash withdrawal…" />
@@ -582,6 +586,10 @@ function TransferForm({ onDone }: { onDone: () => void }) {
       className="grid grid-cols-1 gap-4 sm:grid-cols-2"
       onSubmit={async (event) => {
         event.preventDefault();
+        if (isFutureDate(date)) {
+          toast.error("Date can't be in the future");
+          return;
+        }
         try {
           await create.mutateAsync({ fromAccountId, toAccountId, amount: Number(amount), date });
           onDone();
@@ -606,7 +614,7 @@ function TransferForm({ onDone }: { onDone: () => void }) {
         <Input id="transfer-amount" inputMode="numeric" placeholder="0" value={amount} onChange={(event) => setAmount(event.target.value)} />
       </Field>
       <Field label="Date" htmlFor="transfer-date" required>
-        <DatePicker id="transfer-date" required value={date} onChange={setDate} disabled={create.isPending} />
+        <DatePicker id="transfer-date" required max={todayInDhaka()} value={date} onChange={setDate} disabled={create.isPending} />
       </Field>
       <p className="text-xs text-muted-foreground sm:col-span-2">Moves money between the team&rsquo;s own accounts — total holdings stay the same.</p>
       <DialogFooter className="sm:col-span-2">
@@ -741,10 +749,10 @@ function ContributionForm({ onCreate, onDone }: { onCreate: CreateContribution; 
         <BankSelect value={bankAccountId} onChange={setBank} id="t-bank" />
       </Field>
 
-      <form.Field name="creditDate" validators={{ onChange: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date") }}>
+      <form.Field name="creditDate" validators={{ onChange: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a date").refine((v) => !isFutureDate(v), "Date can't be in the future") }}>
         {(field) => (
           <Field label="Credit date" htmlFor="t-date" required error={firstError(field.state.meta.errors)}>
-            <DatePicker id="t-date" required value={field.state.value} onBlur={field.handleBlur} onChange={field.handleChange} aria-invalid={field.state.meta.errors.length > 0} />
+            <DatePicker id="t-date" required max={todayInDhaka()} value={field.state.value} onBlur={field.handleBlur} onChange={field.handleChange} aria-invalid={field.state.meta.errors.length > 0} />
           </Field>
         )}
       </form.Field>
@@ -787,7 +795,8 @@ function ContributionForm({ onCreate, onDone }: { onCreate: CreateContribution; 
                 !memberId ||
                 !/^\d+$/.test(amount) ||
                 Number(amount) <= 0 ||
-                !/^\d{4}-\d{2}-\d{2}$/.test(creditDate)
+                !/^\d{4}-\d{2}-\d{2}$/.test(creditDate) ||
+                isFutureDate(creditDate)
               }
             >
               {isSubmitting ? "Recording…" : "Record contribution"}

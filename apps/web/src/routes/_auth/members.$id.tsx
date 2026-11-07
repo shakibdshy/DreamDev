@@ -35,7 +35,7 @@ import { Amount } from "@/components/amount";
 import { LoanRepaymentForm } from "@/components/loan-repayment-form";
 import { BankSelect, useBankBalance } from "@/components/bank-select";
 import { EmptyState } from "@/components/empty-state";
-import { DatePicker } from "@/components/date-picker";
+import { DatePicker, isFutureDate } from "@/components/date-picker";
 import { MemberActions } from "@/components/member-actions";
 import { MemberTelegramCard } from "@/components/telegram/member-telegram-card";
 import { Field } from "@/components/field";
@@ -730,6 +730,10 @@ function NewLoanDialog({
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (isFutureDate(date)) {
+      toast.error("Date can't be in the future");
+      return;
+    }
     setSaving(true);
     try {
       const result = await api<{ warning: string | null }>(`/api/members/${memberId}/loans`, {
@@ -762,7 +766,7 @@ function NewLoanDialog({
             <Input id="loan-amount" inputMode="numeric" placeholder="0" value={amount} onChange={(event) => setAmount(event.target.value)} />
           </Field>
           <Field label="Date" htmlFor="loan-date" required>
-            <DatePicker id="loan-date" value={date} onChange={setDate} required />
+            <DatePicker id="loan-date" value={date} onChange={setDate} required max={todayInDhaka()} />
           </Field>
           <Field
             label="Bank account"

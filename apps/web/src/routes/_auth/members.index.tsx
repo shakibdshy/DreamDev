@@ -19,7 +19,7 @@ import { cn } from "@DreamDev/ui/lib/utils";
 import { listMembersQuerySchema } from "@/api/members/schema";
 import { Amount } from "@/components/amount";
 import { EmptyState } from "@/components/empty-state";
-import { DatePicker } from "@/components/date-picker";
+import { DatePicker, isFutureDate } from "@/components/date-picker";
 import { MemberActions } from "@/components/member-actions";
 import { Field } from "@/components/field";
 import { PageHeader } from "@/components/page-header";
@@ -352,11 +352,12 @@ function CreateMemberDialog({ open, onOpenChange }: { open: boolean; onOpenChang
             )}
           </form.Field>
 
-          <form.Field name="joiningDate" validators={{ onChange: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a joining date") }}>
+          <form.Field name="joiningDate" validators={{ onChange: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Pick a joining date").refine((v) => !isFutureDate(v), "Joining date can't be in the future") }}>
             {(field) => (
               <Field label="Joining date" htmlFor="m-joined" required error={firstError(field.state.meta.errors)}>
                 <DatePicker
                   id="m-joined"
+                  max={todayInDhaka()}
                   value={field.state.value}
                   onBlur={field.handleBlur}
                   onChange={field.handleChange}
