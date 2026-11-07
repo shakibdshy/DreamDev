@@ -424,6 +424,9 @@ describe("confirm gate: contribution writes (ticket 4/8)", () => {
 
 import { executeDelete, executeWrite, previewDelete, previewWrite, writeInputSchema } from "./write-tools";
 import { futureDay } from "../api/test-support";
+import { agentTools } from "./tools";
+import { createLoan, listLoans } from "../api/loans/service";
+import { createContribution } from "../api/transactions/service";
 
 describe("generic write surface (ticket 5/8)", () => {
   const deps = () => ({ db, session: adminSession });
@@ -564,8 +567,8 @@ describe("generic write surface (ticket 5/8)", () => {
   });
 
   test("unknown entity:action combinations are refused in both registries", async () => {
-    expect(await executeWrite(deps(), "admin", { entity: "member", action: "repay", args: {} }).catch((e) => (e as Error).message)).toContain("not available");
-    expect(await executeWrite(deps(), "admin", { entity: "bank", action: "repay", args: {} }).catch((e) => (e as Error).message)).toContain("not available");
+    expect(await executeWrite(deps(), "admin", { entity: "member", action: "repay", args: {} }).catch((e) => (e as Error).message)).toContain("not a valid write");
+    expect(await executeWrite(deps(), "admin", { entity: "bank", action: "repay", args: {} }).catch((e) => (e as Error).message)).toContain("not a valid write");
   });
 
   test("future record dates are rejected at the sanity layer, before any card", async () => {
@@ -578,6 +581,54 @@ describe("generic write surface (ticket 5/8)", () => {
     await expect(
       previewWrite(deps(), "admin", { entity: "loan_repayment", action: "repay", id: "any", args: { bankAccountId: bank.id, amount: 100, creditDate: tomorrow } }),
     ).rejects.toThrow("use today or earlier");
+  });
+});
+
+describe("loan repayments through chat (spec 2026-11-07)", () => {
+  const deps = () => ({ db, session: adminSession });
+
+  test("list_loans exposes loan ids so repayments can be proposed", async () => {
+    const { member, bank } = await seedFund();
+    const { loan } = await createLoan({ db, session: adminSession }, { memberId: member.id, bankAccountId: bank.id, amount: 12_000, date: "2026-11-01" });
+    expect(agentTools("admin").map((t) => t.name)).toContain("list_loans");
+    const tool = agentTools("admin").find((t) => t.name === "list_loans")!;
+    const result = await (tool as unknown as { execute: (input: unknown, ctx: unknown) => Promise<{ loans: { id: string; memberName: string; outstanding: number; settled: boolean }[] }> })
+      .execute({}, { context: ctxFor() });
+    expect(result.loans[0]).toMatchObject({ id: loan.id, memberName: "Rahim Uddin", outstanding: 12_000, settled: false });
+  });
+
+  test("loan:repay alias previews and executes like loan_repayment:repay", async () => {
+    const { member, bank } = await seedFund();
+    const { loan } = await createLoan({ db, session: adminSession }, { memberId: member.id, bankAccountId: bank.id, amount: 12_000, date: "2026-11-01" });
+    const preview = await previewWrite(deps(), "admin", { entity: "loan", action: "repay", id: loan.id, args: { bankAccountId: bank.id, amount: 4_000, creditDate: "2026-11-01" } });
+    expect(preview.lines.join(" ")).toContain("Outstanding after");
+    await executeWrite(deps(), "admin", { entity: "loan", action: "repay", id: loan.id, args: { bankAccountId: bank.id, amount: 4_000, creditDate: "2026-11-01" } });
+    expect(await db.loanRepayment.count()).toBe(1);
+  });
+
+  test("listLoans filters by member and reports settled state", async () => {
+    const { member, bank } = await seedFund();
+    const { loan } = await createLoan({ db, session: adminSession }, { memberId: member.id, bankAccountId: bank.id, amount: 5_000, date: "2026-11-01" });
+    await executeWrite(deps(), "admin", { entity: "loan_repayment", action: "repay", id: loan.id, args: { bankAccountId: bank.id, amount: 5_000, creditDate: "2026-11-01" } });
+    const mine = await listLoans({ db, session: adminSession }, member.id);
+    expect(mine.loans[0]).toMatchObject({ id: loan.id, outstanding: 0, settled: true });
+    const others = await listLoans({ db, session: adminSession }, "someone-else");
+    expect(others.loans).toHaveLength(0);
+  });
+
+  test("unknown entity:action errors name the valid writes and where ids come from", async () => {
+    const message = await executeWrite(deps(), "admin", { entity: "bank", action: "repay", args: {} }).catch((e) => (e as Error).message);
+    expect(message).toContain("loan_repayment:repay");
+    expect(message).toContain("list_loans");
+  });
+
+  test("transactions_feed entries carry ids", async () => {
+    const { member, bank } = await seedFund();
+    await createContribution({ db, session: adminSession }, { memberId: member.id, bankAccountId: bank.id, amount: 1_000, creditDate: "2026-10-05" });
+    const tool = readTools().find((t) => t.name === "transactions_feed")!;
+    const result = await (tool as unknown as { execute: (input: unknown, ctx: unknown) => Promise<{ entries: { id: string | null }[] }> })
+      .execute({}, { context: ctxFor() });
+    expect(result.entries[0]?.id).toBeTruthy();
   });
 });
 

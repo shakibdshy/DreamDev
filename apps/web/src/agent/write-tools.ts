@@ -85,6 +85,19 @@ function assertRoleAllowed(role: "admin" | "editor", input: WriteInput): void {
   if (ADMIN_ACTIONS.includes(input.action)) throw new Error("Share changes are Admin-only");
 }
 
+/**
+ * Models naturally say `loan` + `repay` for a Loan Repayment — accept that
+ * phrasing as the canonical `loan_repayment:repay` instead of dead-ending in
+ * the fallback error (which once read as "use the dashboard forms").
+ */
+function normalizeInput(input: WriteInput): WriteInput {
+  return input.entity === "loan" && input.action === "repay" ? { ...input, entity: "loan_repayment" } : input;
+}
+
+const VALID_WRITES =
+  "loan:create · loan_repayment:repay (alias loan:repay) · expense:create|update · transfer:create|update · adjustment:create|update (Admin) · member:create|update|status|shares (shares Admin) · bank:create|update · contribution:update. " +
+  "Resolve ids with list_members / list_banks / list_loans / transactions_feed — feed entries carry id.";
+
 const SANITY_MAX_AMOUNT = 10_000_000; // ৳1 crore — the spec's tool-layer cap
 
 /**
@@ -115,6 +128,7 @@ interface WriteDeps {
 export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", input: WriteInput): Promise<{ lines: string[] }> {
   assertRoleAllowed(role, input);
   assertSanity(input);
+  input = normalizeInput(input);
   input = { ...input, args: sanitizeOptionalText(input.args, ["note", "reason", "address", "accountNumber"]) };
   const { db, session } = deps;
   const s = { db, session };
@@ -216,7 +230,7 @@ export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", in
       return { lines: [`Update contribution: ${taka(contribution.amount)} from ${await memberName(contribution.memberId)} (${day(contribution.creditDate)})`, ...Object.entries(parsed).filter(([, v]) => v !== undefined).map(([k, v]) => `${k} → ${String(v)}`)] };
     }
     default:
-      throw new Error(`${entity} ${action} is not available through chat — use the dashboard forms`);
+      throw new Error(`${entity} ${action} is not a valid write through chat. Valid writes: ${VALID_WRITES}`);
   }
 }
 
@@ -224,6 +238,7 @@ export async function previewWrite(deps: WriteDeps, role: "admin" | "editor", in
 export async function executeWrite(deps: WriteDeps, role: "admin" | "editor", input: WriteInput): Promise<{ recorded: true }> {
   assertRoleAllowed(role, input);
   assertSanity(input);
+  input = normalizeInput(input);
   input = { ...input, args: sanitizeOptionalText(input.args, ["note", "reason", "address", "accountNumber"]) };
   const s = { db: deps.db, session: deps.session };
   const { entity, action, id, args } = input;
@@ -283,7 +298,7 @@ export async function executeWrite(deps: WriteDeps, role: "admin" | "editor", in
       await updateContribution(s, id, args);
       return { recorded: true };
     default:
-      throw new Error(`${entity} ${action} is not available through chat`);
+      throw new Error(`${entity} ${action} is not a valid write through chat. Valid writes: ${VALID_WRITES}`);
   }
 }
 

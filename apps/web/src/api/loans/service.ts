@@ -65,6 +65,38 @@ export async function memberLoans(deps: LoansDeps, memberId: string) {
   return loanViews(deps.db, memberId);
 }
 
+/** All live Loans across the fund (optionally one Member's), with repayment aggregates — read for the agent's list_loans tool. */
+export async function listLoans(deps: LoansDeps, memberId?: string) {
+  requireUser(deps.session);
+  const loans = await deps.db.loan.findMany({
+    where: { deletedAt: null, ...(memberId ? { memberId } : {}) },
+    orderBy: [{ date: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    include: { bankAccount: { select: { bankName: true } }, member: { select: { name: true } } },
+  });
+  const repaid = await deps.db.loanRepayment.groupBy({
+    by: ["loanId"],
+    _sum: { amount: true },
+    where: { deletedAt: null, loanId: { in: loans.map((l) => l.id) } },
+  });
+  const repaidByLoan = new Map(repaid.map((r) => [r.loanId, r._sum.amount ?? 0]));
+  const views = loans.map((loan) => {
+    const repaidAmount = repaidByLoan.get(loan.id) ?? 0;
+    return {
+      id: loan.id,
+      memberId: loan.memberId,
+      memberName: loan.member.name,
+      amount: loan.amount,
+      date: loan.date.toISOString().slice(0, 10),
+      bankName: loan.bankAccount.bankName,
+      note: loan.note,
+      repaid: repaidAmount,
+      outstanding: Math.max(0, loan.amount - repaidAmount),
+      settled: loan.amount - repaidAmount <= 0,
+    };
+  });
+  return { loans: views, totalOutstanding: views.reduce((sum, l) => sum + l.outstanding, 0) };
+}
+
 /** Creates a Loan from the fund; warns (never blocks) past 2× total contributions. */
 export async function createLoan(deps: LoansDeps, body: unknown) {
   const user = requireUser(deps.session);

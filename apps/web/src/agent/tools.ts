@@ -4,6 +4,7 @@ import { z } from "zod";
 import { getMember, listMembers } from "@/api/members/service";
 import { dashboard } from "@/api/dashboard/service";
 import { listBanks } from "@/api/banks/service";
+import { listLoans } from "@/api/loans/service";
 import { createContribution, listFeed, memberPosition } from "@/api/transactions/service";
 
 import { previewContributionDef, recordContributionDef } from "./contribution-tools";
@@ -171,6 +172,47 @@ const listBanksTool = toolDefinition({
   };
 });
 
+const listLoansTool = toolDefinition({
+  name: "list_loans",
+  description:
+    "List Loans with id, member, principal, repaid and outstanding. Use it to resolve a Loan id before proposing a repayment (preview_write with entity loan_repayment, action repay, id = loan id).",
+  inputSchema: z.object({
+    memberId: z.string().optional().meta({ description: "Limit to one Member (id from list_members)" }),
+  }),
+  outputSchema: z.object({
+    total: z.number(),
+    loans: z.array(
+      z.object({
+        id: z.string(),
+        memberId: z.string(),
+        memberName: z.string(),
+        amount: z.number(),
+        repaid: z.number(),
+        outstanding: z.number(),
+        settled: z.boolean(),
+        bankName: z.string(),
+        date: z.string(),
+      }),
+    ),
+  }),
+}).server<AgentContext>(async ({ memberId }, toolCtx) => {
+  const result = await listLoans(serviceDeps(toolCtx.context), memberId);
+  return {
+    total: result.loans.length,
+    loans: result.loans.map((l) => ({
+      id: l.id,
+      memberId: l.memberId,
+      memberName: l.memberName,
+      amount: l.amount,
+      repaid: l.repaid,
+      outstanding: l.outstanding,
+      settled: l.settled,
+      bankName: l.bankName,
+      date: l.date,
+    })),
+  };
+});
+
 const transactionsFeedTool = toolDefinition({
   name: "transactions_feed",
   description:
@@ -186,6 +228,7 @@ const transactionsFeedTool = toolDefinition({
     total: z.number(),
     entries: z.array(
       z.object({
+        id: z.string(),
         type: z.string(),
         date: z.string(),
         amount: z.number(),
@@ -200,6 +243,7 @@ const transactionsFeedTool = toolDefinition({
   return {
     total: result.meta.total,
     entries: result.data.map((e) => ({
+      id: e.id,
       type: e.type,
       date: e.date,
       amount: e.amount,
@@ -260,7 +304,7 @@ const recordContributionTool = recordContributionDef.server<AgentContext>(async 
 
 /** All tools for a role: reads + gated contribution writes + the generic gated surface. */
 export function agentTools(role: "admin" | "editor" = "admin") {
-  const reads = [listMembersTool, memberPositionTool, memberDetailTool, fundOverviewTool, listBanksTool, transactionsFeedTool];
+  const reads = [listMembersTool, memberPositionTool, memberDetailTool, fundOverviewTool, listBanksTool, listLoansTool, transactionsFeedTool];
   return [...reads, previewContributionTool, recordContributionTool, ...buildWriteTools(role)];
 }
 
