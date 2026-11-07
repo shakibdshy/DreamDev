@@ -54,6 +54,10 @@ _Avoid_: saving, deposit, payment
 The date money actually entered the Bank Account. The only date a money-in record carries.
 _Avoid_: payment date, transaction date
 
+**Record dates are never in the future**:
+Every record date (loan date, Credit Dates, expense and transfer dates, Joining Date, status effective date) is today or earlier, at the Asia/Dhaka clock. Only share-change months may point at future months.
+_Avoid_: post-dated, scheduled dates
+
 **Advance**:
 Money contributed beyond what a member owes; carried forward against future billing.
 _Avoid_: prepayment, credit
