@@ -41,9 +41,29 @@ export function MemberActions({ member, compact = false, onRemoved }: { member: 
         method: kind === "edit" ? "PATCH" : kind === "remove" ? "DELETE" : "POST",
         body: body === undefined ? undefined : JSON.stringify(body),
       }),
-    onSuccess: async (_data, { kind }) => {
-      toast.success(kind === "remove" ? "Member removed" : "Member updated");
+    onMutate: ({ kind, body }) => {
+      // Close the dialog and apply the visible change immediately — the API only confirms later.
       setAction(null);
+      toast.loading(kind === "remove" ? "Removing member…" : "Saving…", { id: "member-action" });
+      const patchRow = (row: Record<string, unknown>) => {
+        if (kind === "edit" && body && typeof body === "object") {
+          for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
+            if (key in row) row[key] = value;
+          }
+        }
+        if (kind !== "edit" && kind !== "remove" && "status" in row) row.status = kind;
+        return row;
+      };
+      // Every cached member list variant shows name/mobile/status — patch them all.
+      queryClient.setQueriesData<{ data: Record<string, unknown>[] }>({ queryKey: ["members"] }, (old) =>
+        old ? { ...old, data: old.data.map((row) => (row.id === member.id ? patchRow({ ...row }) : row)) } : old,
+      );
+      queryClient.setQueriesData<{ member: Record<string, unknown> }>({ queryKey: ["member", member.id] }, (old) =>
+        old ? { ...old, member: patchRow({ ...old.member }) } : old,
+      );
+    },
+    onSuccess: async (_data, { kind }) => {
+      toast.success(kind === "remove" ? "Member removed" : "Member updated", { id: "member-action" });
       if (kind === "remove") onRemoved?.();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["members"] }),
@@ -55,7 +75,11 @@ export function MemberActions({ member, compact = false, onRemoved }: { member: 
         ]),
       ]);
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["members"] });
+      queryClient.invalidateQueries({ queryKey: ["member", member.id] });
+      toast.error(error.message, { id: "member-action" });
+    },
   });
   const choose = (next: Action) => {
     mutation.reset();

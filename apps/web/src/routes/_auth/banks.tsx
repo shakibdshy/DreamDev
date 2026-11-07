@@ -49,13 +49,25 @@ function BanksPage() {
 
   const remove = useMutation({
     mutationFn: (bank: BankRow) => api(`/api/banks/${bank.id}`, { method: "DELETE" }),
-    onSuccess: (_result, bank) => {
-      toast.success(`Removed ${bank.bankName}`);
+    onMutate: (bank) => {
+      // Close the dialog and drop the account immediately — the API only confirms later.
       setRemoving(null);
+      toast.loading(`Removing ${bank.bankName}…`, { id: "bank-change" });
+      queryClient.setQueriesData<{ data: BankRow[] }>({ queryKey: ["banks"] }, (old) =>
+        old ? { ...old, data: old.data.filter((row) => row.id !== bank.id) } : old,
+      );
+    },
+    onSuccess: (_result, bank) => {
+      toast.success(`Removed ${bank.bankName}`, { id: "bank-change" });
+    },
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["banks"] }); // roll the removal back
+      toast.error(error.message, { id: "bank-change" });
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["banks"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
-    onError: (error: Error) => toast.error(error.message),
   });
 
   const banks = banksQuery.data?.data ?? [];
@@ -198,25 +210,47 @@ function BankAccountDialog({ bank, onClose }: { bank: BankRow | null; onClose: (
       openingBalance: "",
     },
     onSubmit: async ({ value }) => {
-      try {
-        const details = {
+      // Close immediately — the card appears/changes optimistically; the API confirms behind a toast.
+      onClose();
+      toast.loading(`${bank ? "Updating" : "Adding"} ${value.bankName}…`, { id: "bank-change" });
+      const details = {
+        bankName: value.bankName,
+        accountNumber: value.accountNumber || (bank ? null : undefined),
+        address: value.address.trim() || (bank ? null : undefined),
+      };
+      const tempId = `optimistic-${Date.now()}`;
+      queryClient.setQueriesData<{ data: BankRow[] }>({ queryKey: ["banks"] }, (old) => {
+        if (bank) {
+          return old
+            ? { ...old, data: old.data.map((row) => (row.id === bank.id ? { ...row, bankName: value.bankName, accountNumber: details.accountNumber ?? null, address: details.address ?? null } : row)) }
+            : old;
+        }
+        const openingBalance = Number(value.openingBalance || 0);
+        const row: BankRow = {
+          id: tempId,
           bankName: value.bankName,
-          accountNumber: value.accountNumber || (bank ? null : undefined),
-          address: value.address.trim() || (bank ? null : undefined),
+          accountNumber: value.accountNumber || null,
+          address: value.address.trim() || null,
+          openingBalance,
+          currentBalance: openingBalance,
+          createdAt: new Date().toISOString(),
         };
+        return old ? { ...old, data: [...old.data, row] } : old;
+      });
+      try {
         await api(bank ? `/api/banks/${bank.id}` : "/api/banks", {
           method: bank ? "PATCH" : "POST",
           // Editing account details must never overwrite its Opening Balance.
           body: JSON.stringify(bank ? details : { ...details, openingBalance: Number(value.openingBalance || 0) }),
         });
-        toast.success(`${bank ? "Updated" : "Added"} ${value.bankName}`);
-        onClose();
+        toast.success(`${bank ? "Updated" : "Added"} ${value.bankName}`, { id: "bank-change" });
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["banks"] }),
           queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
         ]);
       } catch (error) {
-        toast.error((error as Error).message);
+        toast.error((error as Error).message, { id: "bank-change" });
+        await queryClient.invalidateQueries({ queryKey: ["banks"] }); // roll the optimistic row back
       }
     },
   });

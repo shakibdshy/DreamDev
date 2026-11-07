@@ -41,19 +41,37 @@ export function MemberTelegramCard({ memberId, isAdmin }: { memberId: string; is
 
   const unlink = useMutation({
     mutationFn: () => api<{ linked: false }>(`/api/members/${memberId}/telegram`, { method: "DELETE" }),
+    onMutate: () => {
+      // Show the unlinked state immediately — the refetch confirms it.
+      queryClient.setQueryData<TelegramStatus>(["member-telegram", memberId], (old) =>
+        old && old.configured ? { ...old, linked: false, linkedAt: null, notifyEnabled: true } : old,
+      );
+    },
     onSuccess: () => {
       setPairing(null);
       toast.success("Telegram unlinked");
       void invalidate();
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      invalidate(); // roll the optimistic unlink back
+      toast.error(error.message);
+    },
   });
 
   const toggleNotify = useMutation({
     mutationFn: (enabled: boolean) =>
       api<{ notifyEnabled: boolean }>(`/api/members/${memberId}/telegram.notify`, { method: "POST", body: JSON.stringify({ notifyEnabled: enabled }) }),
+    onMutate: (enabled) => {
+      // Flip the switch immediately — the refetch confirms it.
+      queryClient.setQueryData<TelegramStatus>(["member-telegram", memberId], (old) =>
+        old ? { ...old, notifyEnabled: enabled } : old,
+      );
+    },
     onSuccess: () => void invalidate(),
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      invalidate(); // roll the optimistic toggle back
+      toast.error(error.message);
+    },
   });
 
   const status = statusQuery.data;

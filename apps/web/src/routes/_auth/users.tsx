@@ -237,20 +237,41 @@ function UserActions({ user, isSelf, onResetPassword }: { user: UserRowData; isS
   const act = useMutation({
     mutationFn: ({ path, body }: { path: string; body?: unknown }) =>
       api(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) }),
+    onMutate: (vars) => {
+      const deactivating = vars.path.endsWith("deactivate");
+      toast.loading(deactivating ? "Deactivating…" : "Reactivating…", { id: "user-change" });
+      // Flip the row's status immediately — the refetch confirms it.
+      queryClient.setQueriesData<{ data: UserRowData[] }>({ queryKey: ["users"] }, (old) =>
+        old ? { ...old, data: old.data.map((row) => (row.id === user.id ? { ...row, status: deactivating ? "deactivated" : "active" } : row)) } : old,
+      );
+    },
     onSuccess: (_result, vars) => {
-      toast.success(vars.path.endsWith("deactivate") ? "User deactivated" : "User reactivated");
+      toast.success(vars.path.endsWith("deactivate") ? "User deactivated" : "User reactivated", { id: "user-change" });
       invalidate();
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      invalidate(); // roll the optimistic status back
+      toast.error(error.message, { id: "user-change" });
+    },
   });
 
   const patch = useMutation({
     mutationFn: (body: unknown) => api(`/api/users/${user.id}`, { method: "PATCH", body: JSON.stringify(body) }),
+    onMutate: (body) => {
+      toast.loading("Updating role…", { id: "user-change" });
+      const role = (body as { role?: string }).role;
+      queryClient.setQueriesData<{ data: UserRowData[] }>({ queryKey: ["users"] }, (old) =>
+        old ? { ...old, data: old.data.map((row) => (row.id === user.id ? { ...row, ...(role ? { role } : {}) } : row)) } : old,
+      );
+    },
     onSuccess: () => {
-      toast.success("Role updated");
+      toast.success("Role updated", { id: "user-change" });
       invalidate();
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      invalidate(); // roll the optimistic role back
+      toast.error(error.message, { id: "user-change" });
+    },
   });
 
   return (
@@ -289,14 +310,16 @@ function CreateUserDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const form = useForm({
     defaultValues: { name: "", email: "", password: "", role: "editor" as "admin" | "editor" },
     onSubmit: async ({ value }) => {
+      // Close immediately — the user appears via the refetch; the API confirms behind a toast.
+      onOpenChange(false);
+      toast.loading(`Creating ${value.name}…`, { id: "user-change" });
       try {
         await api("/api/users", { method: "POST", body: JSON.stringify(value) });
-        toast.success(`Created ${value.name}`);
+        toast.success(`Created ${value.name}`, { id: "user-change" });
         form.reset();
-        onOpenChange(false);
         await queryClient.invalidateQueries({ queryKey: ["users"] });
       } catch (error) {
-        toast.error((error as Error).message);
+        toast.error((error as Error).message, { id: "user-change" });
       }
     },
   });
@@ -392,12 +415,16 @@ function ResetPasswordDialog({ user, onClose }: { user: UserRowData | null; onCl
   const reset = useMutation({
     mutationFn: (newPassword: string) =>
       api(`/api/users/${user?.id}/reset-password`, { method: "POST", body: JSON.stringify({ newPassword }) }),
-    onSuccess: () => {
-      toast.success("Password reset");
-      setPassword("");
+    onMutate: () => {
+      // Close immediately — nothing in the list changes; the API confirms behind a toast.
       onClose();
+      setPassword("");
+      toast.loading("Resetting password…", { id: "user-change" });
     },
-    onError: (error: Error) => toast.error(error.message),
+    onSuccess: () => {
+      toast.success("Password reset", { id: "user-change" });
+    },
+    onError: (error: Error) => toast.error(error.message, { id: "user-change" }),
   });
 
   return (

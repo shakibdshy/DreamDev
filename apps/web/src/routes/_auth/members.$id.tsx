@@ -33,7 +33,7 @@ import { Progress } from "@DreamDev/ui/components/progress";
 import type { LoanView } from "@/api/loans/service";
 import { Amount } from "@/components/amount";
 import { LoanRepaymentForm } from "@/components/loan-repayment-form";
-import { BankSelect, useBankBalance } from "@/components/bank-select";
+import { BankSelect, cachedBankName, useBankBalance } from "@/components/bank-select";
 import { EmptyState } from "@/components/empty-state";
 import { DatePicker, isFutureDate } from "@/components/date-picker";
 import { MemberActions } from "@/components/member-actions";
@@ -99,11 +99,14 @@ function MemberDetailPage() {
   const act = useMutation({
     mutationFn: ({ path, body, method = "POST" }: { path: string; body?: unknown; method?: string }) =>
       api(path, { method, body: body === undefined ? undefined : JSON.stringify(body) }),
+    onMutate: () => {
+      toast.loading("Saving…", { id: "member-act" });
+    },
     onSuccess: () => {
-      toast.success("Saved");
+      toast.success("Saved", { id: "member-act" });
       invalidate();
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => toast.error(error.message, { id: "member-act" }),
   });
 
   async function onPhotoChange(file: File | undefined) {
@@ -478,6 +481,24 @@ function ShareChangeDialog({
   );
 }
 
+type LoansResponse = { loans: LoanView[]; totalOutstanding: number };
+
+/** Recomputes a loan's repaid/outstanding/settled from its repayment rows. */
+function withRecomputedLoan(loan: LoanView, repayments: LoanView["repayments"]): LoanView {
+  const repaid = repayments.reduce((sum, r) => sum + r.amount, 0);
+  const outstanding = Math.max(0, loan.amount - repaid);
+  return { ...loan, repayments, repaid, outstanding, settled: outstanding === 0 };
+}
+
+/** Optimistically rewrites the member's cached loans list (totals recomputed). */
+function patchLoans(queryClient: ReturnType<typeof useQueryClient>, memberId: string, patch: (loans: LoanView[]) => LoanView[]) {
+  const key = ["loans", memberId] as const;
+  const data = queryClient.getQueryData<LoansResponse>(key);
+  if (!data) return;
+  const loans = patch(data.loans);
+  queryClient.setQueryData(key, { loans, totalOutstanding: loans.reduce((sum, l) => sum + l.outstanding, 0) });
+}
+
 function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const [newLoanOpen, setNewLoanOpen] = useState(false);
@@ -499,22 +520,39 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
 
   const removeLoan = useMutation({
     mutationFn: (loanId: string) => api(`/api/loans/${loanId}`, { method: "DELETE" }),
-    onSuccess: () => {
-      toast.success("Loan removed");
+    onMutate: (loanId) => {
+      // Close the dialog and drop the loan immediately — the API only confirms later.
       setRemoving(null);
-      refresh();
+      toast.loading("Removing loan…", { id: "loan-change" });
+      patchLoans(queryClient, memberId, (loans) => loans.filter((loan) => loan.id !== loanId));
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["loans", memberId] });
+      toast.error(error.message, { id: "loan-change" });
+    },
+    onSuccess: () => toast.success("Loan removed", { id: "loan-change" }),
+    onSettled: () => refresh(),
   });
 
   const removeRepayment = useMutation({
     mutationFn: (repaymentId: string) => api(`/api/loans/repayments/${repaymentId}`, { method: "DELETE" }),
-    onSuccess: () => {
-      toast.success("Repayment removed — loan outstanding recovered");
+    onMutate: (repaymentId) => {
+      // Close the dialog and remove the repayment immediately — outstanding recovers.
       setRemovingRepayment(null);
-      refresh();
+      toast.loading("Removing repayment…", { id: "loan-change" });
+      patchLoans(queryClient, memberId, (loans) =>
+        loans.map((loan) => {
+          if (!loan.repayments.some((r) => r.id === repaymentId)) return loan;
+          return withRecomputedLoan(loan, loan.repayments.filter((r) => r.id !== repaymentId));
+        }),
+      );
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["loans", memberId] });
+      toast.error(error.message, { id: "loan-change" });
+    },
+    onSuccess: () => toast.success("Repayment removed — loan outstanding recovered", { id: "loan-change" }),
+    onSettled: () => refresh(),
   });
 
   const loans = loansQuery.data?.loans ?? [];
@@ -645,7 +683,28 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
             <DialogDescription>Return money to the fund against this loan.</DialogDescription>
           </DialogHeader>
           {repaying && (
-            <LoanRepaymentForm memberId={memberId} loanId={repaying.id} onDone={() => setRepaying(null)} />
+            <LoanRepaymentForm
+              memberId={memberId}
+              loanId={repaying.id}
+              onDone={() => setRepaying(null)}
+              optimisticRow={(values) => {
+                patchLoans(queryClient, memberId, (loans) =>
+                  loans.map((loan) => {
+                    if (loan.id !== values.loanId) return loan;
+                    return withRecomputedLoan(loan, [
+                      ...loan.repayments,
+                      {
+                        id: `optimistic-${Date.now()}`,
+                        amount: values.amount,
+                        creditDate: values.creditDate,
+                        bankName: cachedBankName(queryClient, values.bankAccountId) ?? "",
+                      },
+                    ]);
+                  }),
+                );
+                return () => queryClient.invalidateQueries({ queryKey: ["loans", memberId] });
+              }}
+            />
           )}
         </DialogContent>
       </Dialog>
@@ -765,7 +824,7 @@ function NewLoanDialog({
   const [bankAccountId, setBankAccountId] = useState("");
   const [date, setDate] = useState(todayInDhaka());
   const [note, setNote] = useState("");
-  const [saving, setSaving] = useState(false);
+  const queryClient = useQueryClient();
   const available = useBankBalance(bankAccountId);
   const over = available !== undefined && Number(amount) > available;
 
@@ -775,23 +834,34 @@ function NewLoanDialog({
       toast.error("Date can't be in the future");
       return;
     }
-    setSaving(true);
+    // Close immediately — the loan appears optimistically; the API confirms behind a toast.
+    onOpenChange(false);
+    toast.loading("Recording loan…", { id: "new-loan" });
+    patchLoans(queryClient, memberId, (loans) => [
+      ...loans,
+      {
+        id: `optimistic-${Date.now()}`,
+        amount: Number(amount),
+        date,
+        note: note || null,
+        repaid: 0,
+        outstanding: Number(amount),
+        settled: false,
+        bankName: cachedBankName(queryClient, bankAccountId) ?? "",
+        repayments: [],
+      },
+    ]);
     try {
       const result = await api<{ warning: string | null }>(`/api/members/${memberId}/loans`, {
         method: "POST",
         body: JSON.stringify({ amount: Number(amount), bankAccountId, date, note: note || undefined }),
       });
-      toast.success("Loan recorded");
+      toast.success("Loan recorded", { id: "new-loan" });
       if (result.warning) toast.warning(result.warning);
-      setAmount("");
-      setNote("");
-      setBankAccountId("");
-      onOpenChange(false);
       onSaved();
     } catch (error) {
-      toast.error((error as Error).message);
-    } finally {
-      setSaving(false);
+      toast.error((error as Error).message, { id: "new-loan" });
+      queryClient.invalidateQueries({ queryKey: ["loans", memberId] }); // roll the optimistic loan back
     }
   }
 
@@ -827,8 +897,8 @@ function NewLoanDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={saving || !amount || !bankAccountId || over}>
-              {saving ? "Recording…" : "Give loan"}
+            <Button type="submit" disabled={!amount || !bankAccountId || over}>
+              Give loan
             </Button>
           </DialogFooter>
         </form>

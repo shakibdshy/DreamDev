@@ -52,3 +52,9 @@ export function BankSelect({
     </NativeSelect>
   );
 }
+
+/** The account's display name from the shared picker cache — for optimistic rows. */
+export function cachedBankName(queryClient: import("@tanstack/react-query").QueryClient, bankAccountId: string): string | undefined {
+  const banks = queryClient.getQueryData<BanksResponse>(["banks"]);
+  return banks?.data.find((b) => b.id === bankAccountId)?.bankName;
+}

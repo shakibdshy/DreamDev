@@ -33,3 +33,9 @@ export function MemberSelect({
     </NativeSelect>
   );
 }
+
+/** The member's display name from the shared picker cache — for optimistic rows. */
+export function cachedMemberName(queryClient: import("@tanstack/react-query").QueryClient, memberId: string): string | undefined {
+  const members = queryClient.getQueryData<MembersResponse>(["members", "select"]);
+  return members?.data.find((m) => m.id === memberId)?.name;
+}

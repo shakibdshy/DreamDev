@@ -22,6 +22,12 @@ type LoanRepaymentFormProps = {
   memberId?: string;
   loanId?: string;
   onDone: () => void;
+  /**
+   * Patches the visible cache with the repayment before the POST resolves —
+   * the feed row (transactions page) or the loans card (member page). Returns
+   * a disposer invoked on failure to roll the optimistic change back.
+   */
+  optimisticRow?: (values: { memberId: string; loanId: string; bankAccountId: string; amount: number; creditDate: string }) => void | (() => void);
 };
 
 type RepaymentInput = {
@@ -42,7 +48,7 @@ function validCreditDate(value: string) {
   return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
 }
 
-function RepaymentForm({ memberId, loanId, onDone }: LoanRepaymentFormProps) {
+function RepaymentForm({ memberId, loanId, onDone, optimisticRow }: LoanRepaymentFormProps) {
   const id = useId();
   const [chosenMemberId, setMember] = useState("");
   const [chosenLoanId, setLoan] = useState("");
@@ -86,8 +92,21 @@ function RepaymentForm({ memberId, loanId, onDone }: LoanRepaymentFormProps) {
         method: "POST",
         body: JSON.stringify({ amount, bankAccountId, creditDate }),
       }),
-    onSuccess: async (result, values) => {
-      toast.success(result.settled ? "Repayment recorded — loan cleared" : `Repayment recorded — ${formatTaka(result.outstandingAfter)} remaining`);
+    onMutate: (values) => {
+      toast.loading("Recording repayment…", { id: "loan-repayment" });
+      return { disposer: optimisticRow?.(values) };
+    },
+    onSuccess: (result) => {
+      toast.success(
+        result.settled ? "Repayment recorded — loan cleared" : `Repayment recorded — ${formatTaka(result.outstandingAfter)} remaining`,
+        { id: "loan-repayment" },
+      );
+    },
+    onError: (error: Error, _values, context) => {
+      context?.disposer?.();
+      toast.error(`Could not record repayment: ${error.message}`, { id: "loan-repayment" });
+    },
+    onSettled: async (_result, _error, values) => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["loans", values.memberId] }),
         queryClient.invalidateQueries({ queryKey: ["transactions"] }),
@@ -97,9 +116,7 @@ function RepaymentForm({ memberId, loanId, onDone }: LoanRepaymentFormProps) {
         queryClient.invalidateQueries({ queryKey: ["members"] }),
         queryClient.invalidateQueries({ queryKey: ["position", values.memberId] }),
       ]);
-      onDone();
     },
-    onError: (error: Error) => toast.error(`Could not record repayment: ${error.message}`),
   });
   const canSubmit = Boolean(
     selectedMemberId && selectedLoan && loansQuery.isSuccess && !loansQuery.isPlaceholderData
@@ -119,6 +136,8 @@ function RepaymentForm({ memberId, loanId, onDone }: LoanRepaymentFormProps) {
       onSubmit={(event) => {
         event.preventDefault();
         if (!canSubmit || !selectedLoan) return;
+        // Close immediately — the card/row updates optimistically; the API confirms behind a toast.
+        onDone();
         repay.mutate({ memberId: selectedMemberId, loanId: selectedLoan.id, amount: amountValue, bankAccountId, creditDate });
       }}
     >

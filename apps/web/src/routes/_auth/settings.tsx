@@ -36,13 +36,23 @@ function SettingsPage() {
   const update = useMutation({
     mutationFn: (sharePrice: number) =>
       api<{ sharePrice: number; changed: boolean }>("/api/settings", { method: "PATCH", body: JSON.stringify({ sharePrice }) }),
-    onSuccess: (result) => {
-      toast.success(result.changed ? `Share price set to ${formatTaka(result.sharePrice)}` : "Price unchanged");
+    onMutate: (sharePrice) => {
+      toast.loading("Setting share price…", { id: "share-price" });
       setPrice("");
+      // Show the new price immediately (effective month confirmed by the refetch).
+      queryClient.setQueryData<{ sharePrice: number; effectiveMonth: string }>(["settings"], (old) =>
+        old ? { ...old, sharePrice } : old,
+      );
+    },
+    onSuccess: (result) => {
+      toast.success(result.changed ? `Share price set to ${formatTaka(result.sharePrice)}` : "Price unchanged", { id: "share-price" });
       queryClient.invalidateQueries({ queryKey: ["settings"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
     },
-    onError: (error: Error) => toast.error(error.message),
+    onError: (error: Error) => {
+      queryClient.invalidateQueries({ queryKey: ["settings"] }); // roll the optimistic price back
+      toast.error(error.message, { id: "share-price" });
+    },
   });
 
   const sharePrice = settingsQuery.data?.sharePrice;

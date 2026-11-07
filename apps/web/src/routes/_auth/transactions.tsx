@@ -19,12 +19,12 @@ import { cn } from "@DreamDev/ui/lib/utils";
 
 import { FEED_TYPES, listFeedQuerySchema } from "@/api/transactions/schema";
 import { Amount } from "@/components/amount";
-import { BankSelect, useBankBalance } from "@/components/bank-select";
+import { BankSelect, cachedBankName, useBankBalance } from "@/components/bank-select";
 import { DatePicker, isFutureDate } from "@/components/date-picker";
 import { EmptyState } from "@/components/empty-state";
 import { Field } from "@/components/field";
 import { LoanRepaymentForm } from "@/components/loan-repayment-form";
-import { MemberSelect } from "@/components/member-select";
+import { MemberSelect, cachedMemberName } from "@/components/member-select";
 import { PageHeader } from "@/components/page-header";
 import { Pagination } from "@/components/pagination";
 import { TransactionIcon, TYPE_LABELS } from "@/components/transaction-icon";
@@ -37,7 +37,10 @@ type FeedRow = {
   id: string;
   type: string;
   date: string;
+  /** Server rows carry it; optimistic temp rows stamp `now` so they sort as newest. */
+  createdAt?: string;
   amount: number;
+  memberId?: string | null;
   memberName: string | null;
   bankName: string | null;
   toBankName: string | null;
@@ -76,6 +79,43 @@ function TransactionsPage() {
   };
 
   const feedQueryKey = ["transactions", search] as const;
+
+  /** Mirrors the server's feed comparator: date, then creation time, then id. */
+  const compareFeedRows = (a: FeedRow, b: FeedRow) => {
+    const dir = search.order === "asc" ? 1 : -1;
+    if (a.date !== b.date) return dir * a.date.localeCompare(b.date);
+    const byCreation = (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+    if (byCreation !== 0) return dir * byCreation;
+    return dir * a.id.localeCompare(b.id);
+  };
+
+  /** Drops an optimistic temp row (rollback path — the refetch would also replace it). */
+  const removeTempEntry = (tempId: string) => {
+    queryClient.setQueryData<FeedResponse>(feedQueryKey, (old) =>
+      old ? { ...old, data: old.data.filter((entry) => entry.id !== tempId) } : old,
+    );
+  };
+
+  /**
+   * Inserts an optimistic temp row into the cached page — only when it matches
+   * the active filters, positioned exactly where the server would place it.
+   * The post-success refetch replaces the whole page with the real row.
+   */
+  const insertTempEntry = (row: FeedRow) => {
+    queryClient.setQueryData<FeedResponse>(feedQueryKey, (old) => {
+      if (!old) return old;
+      if (search.type && search.type !== row.type) return old;
+      if (search.from && row.date < search.from) return old;
+      if (search.to && row.date > search.to) return old;
+      return { ...old, data: [...old.data, row].sort(compareFeedRows) };
+    });
+  };
+
+  const tempRow = (partial: Omit<FeedRow, "id" | "createdAt"> & { id?: string }): FeedRow => ({
+    id: partial.id ?? `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: new Date().toISOString(),
+    ...partial,
+  });
   const feedQuery = useQuery({
     queryKey: feedQueryKey,
     queryFn: () =>
@@ -104,11 +144,26 @@ function TransactionsPage() {
   const createContribution = useMutation({
     mutationFn: (values: { memberId: string; bankAccountId: string; amount: number; creditDate: string; note?: string }) =>
       api<{ id: string }>("/api/contributions", { method: "POST", body: JSON.stringify(values) }),
+    onMutate: (values) => {
+      toast.loading("Recording contribution…", { id: "record-entry" });
+      insertTempEntry(
+        tempRow({
+          type: "contribution",
+          date: values.creditDate,
+          amount: values.amount,
+          memberId: values.memberId,
+          memberName: cachedMemberName(queryClient, values.memberId) ?? null,
+          bankName: cachedBankName(queryClient, values.bankAccountId) ?? null,
+          toBankName: null,
+          note: values.note ?? null,
+        }),
+      );
+    },
+    onError: (error: Error) => toast.error(`Could not record contribution: ${error.message}`, { id: "record-entry" }),
     onSuccess: async () => {
-      toast.success("Contribution recorded");
+      toast.success("Contribution recorded", { id: "record-entry" });
       await afterChange();
     },
-    onError: (error: Error) => toast.error(error.message),
   });
 
   const editEntry = useMutation({
@@ -387,10 +442,28 @@ function TransactionsPage() {
           </div>
 
           {entryType === "contribution" && <ContributionForm onCreate={createContribution.mutateAsync} onDone={() => setEntryOpen(false)} />}
-          {entryType === "loan_repayment" && <LoanRepaymentForm onDone={() => setEntryOpen(false)} />}
-          {entryType === "expense" && <ExpenseForm onDone={() => setEntryOpen(false)} />}
-          {entryType === "transfer" && <TransferForm onDone={() => setEntryOpen(false)} />}
-          {entryType === "adjustment" && isAdmin && <AdjustmentForm onDone={() => setEntryOpen(false)} />}
+          {entryType === "loan_repayment" && (
+            <LoanRepaymentForm
+              onDone={() => setEntryOpen(false)}
+              optimisticRow={(values) => {
+                const row = tempRow({
+                  type: "loan_repayment",
+                  date: values.creditDate,
+                  amount: values.amount,
+                  memberId: values.memberId,
+                  memberName: cachedMemberName(queryClient, values.memberId) ?? null,
+                  bankName: cachedBankName(queryClient, values.bankAccountId) ?? null,
+                  toBankName: null,
+                  note: null,
+                });
+                insertTempEntry(row);
+                return () => removeTempEntry(row.id);
+              }}
+            />
+          )}
+          {entryType === "expense" && <ExpenseForm onDone={() => setEntryOpen(false)} optimistic={{ insert: insertTempEntry, remove: removeTempEntry }} />}
+          {entryType === "transfer" && <TransferForm onDone={() => setEntryOpen(false)} optimistic={{ insert: insertTempEntry, remove: removeTempEntry }} />}
+          {entryType === "adjustment" && isAdmin && <AdjustmentForm onDone={() => setEntryOpen(false)} optimistic={{ insert: insertTempEntry, remove: removeTempEntry }} />}
         </DialogContent>
       </Dialog>
 
@@ -506,24 +579,54 @@ function EditAmountDialog({
   );
 }
 
-/** Shared post-and-invalidate for the secondary entry forms. */
-function useEntryMutation(path: string) {
+/** The feed-cache channel a form needs to place its optimistic temp row. */
+type FeedOptimistic = { insert: (row: FeedRow) => void; remove: (tempId: string) => void };
+
+/**
+ * Shared post-and-invalidate for the secondary entry forms. `buildTempRow`
+ * turns the submitted values into the optimistic row shown while the POST and
+ * its refetch are in flight; the refetch replaces it with the real record.
+ */
+function useEntryMutation(path: string, optimistic: FeedOptimistic, buildTempRow?: (body: Record<string, unknown>) => FeedRow | null) {
   return useMutation({
-    mutationFn: (body: unknown) => api(path, { method: "POST", body: JSON.stringify(body) }),
+    mutationFn: (body: Record<string, unknown>) => api(path, { method: "POST", body: JSON.stringify(body) }),
+    onMutate: (body) => {
+      toast.loading("Recording entry…", { id: "record-entry" });
+      const row = buildTempRow?.(body);
+      if (row) {
+        optimistic.insert(row);
+        return { tempId: row.id };
+      }
+      return undefined;
+    },
+    onError: (error: Error, _body, context) => {
+      if (context?.tempId) optimistic.remove(context.tempId);
+      toast.error(`Could not record entry: ${error.message}`, { id: "record-entry" });
+    },
     onSuccess: async () => {
-      toast.success("Recorded");
+      toast.success("Recorded", { id: "record-entry" });
       await queryClient.invalidateQueries({ queryKey: ["transactions"] });
       await queryClient.invalidateQueries({ queryKey: ["banks"] });
       await queryClient.invalidateQueries({ queryKey: ["members"] });
       await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       await queryClient.invalidateQueries({ queryKey: ["member"] });
     },
-    onError: (error: Error) => toast.error(error.message),
   });
 }
 
-function ExpenseForm({ onDone }: { onDone: () => void }) {
-  const create = useEntryMutation("/api/expenses");
+function ExpenseForm({ onDone, optimistic }: { onDone: () => void; optimistic: FeedOptimistic }) {
+  const create = useEntryMutation("/api/expenses", optimistic, (body) => ({
+    id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: new Date().toISOString(),
+    type: "expense",
+    date: String(body.date),
+    amount: -Number(body.amount),
+    memberId: null,
+    memberName: null,
+    bankName: cachedBankName(queryClient, String(body.bankAccountId)) ?? null,
+    toBankName: null,
+    note: (body.note as string) ?? null,
+  }));
   const [bankAccountId, setBank] = useState("");
   const [amount, setAmount] = useState("");
   const [date, setDate] = useState(todayInDhaka());
@@ -539,12 +642,9 @@ function ExpenseForm({ onDone }: { onDone: () => void }) {
           toast.error("Date can't be in the future");
           return;
         }
-        try {
-          await create.mutateAsync({ bankAccountId, amount: Number(amount), date, note: note || undefined });
-          onDone();
-        } catch {
-          // toast already surfaced
-        }
+        // Close immediately — the row appears optimistically; the API confirms behind a toast.
+        onDone();
+        create.mutate({ bankAccountId, amount: Number(amount), date, note: note || undefined });
       }}
     >
       <Field
@@ -575,8 +675,19 @@ function ExpenseForm({ onDone }: { onDone: () => void }) {
   );
 }
 
-function TransferForm({ onDone }: { onDone: () => void }) {
-  const create = useEntryMutation("/api/transfers");
+function TransferForm({ onDone, optimistic }: { onDone: () => void; optimistic: FeedOptimistic }) {
+  const create = useEntryMutation("/api/transfers", optimistic, (body) => ({
+    id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: new Date().toISOString(),
+    type: "transfer",
+    date: String(body.date),
+    amount: -Number(body.amount),
+    memberId: null,
+    memberName: null,
+    bankName: cachedBankName(queryClient, String(body.fromAccountId)) ?? null,
+    toBankName: cachedBankName(queryClient, String(body.toAccountId)) ?? null,
+    note: null,
+  }));
   const [fromAccountId, setFrom] = useState("");
   const [toAccountId, setTo] = useState("");
   const [amount, setAmount] = useState("");
@@ -592,12 +703,8 @@ function TransferForm({ onDone }: { onDone: () => void }) {
           toast.error("Date can't be in the future");
           return;
         }
-        try {
-          await create.mutateAsync({ fromAccountId, toAccountId, amount: Number(amount), date });
-          onDone();
-        } catch {
-          // toast already surfaced
-        }
+        onDone();
+        create.mutate({ fromAccountId, toAccountId, amount: Number(amount), date });
       }}
     >
       <Field
@@ -628,8 +735,19 @@ function TransferForm({ onDone }: { onDone: () => void }) {
   );
 }
 
-function AdjustmentForm({ onDone }: { onDone: () => void }) {
-  const create = useEntryMutation("/api/adjustments");
+function AdjustmentForm({ onDone, optimistic }: { onDone: () => void; optimistic: FeedOptimistic }) {
+  const create = useEntryMutation("/api/adjustments", optimistic, (body) => ({
+    id: `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    createdAt: new Date().toISOString(),
+    type: "adjustment",
+    date: body.month ? `${String(body.month)}-15` : todayInDhaka(),
+    amount: Number(body.amount),
+    memberId: String(body.memberId),
+    memberName: cachedMemberName(queryClient, String(body.memberId)) ?? null,
+    bankName: null,
+    toBankName: null,
+    note: String(body.reason),
+  }));
   const [memberId, setMember] = useState("");
   const [amount, setAmount] = useState("");
   const [month, setMonth] = useState("");
@@ -639,12 +757,8 @@ function AdjustmentForm({ onDone }: { onDone: () => void }) {
       className="grid grid-cols-1 gap-4 sm:grid-cols-2"
       onSubmit={async (event) => {
         event.preventDefault();
-        try {
-          await create.mutateAsync({ memberId, amount: Number(amount), month: month || undefined, reason });
-          onDone();
-        } catch {
-          // toast already surfaced
-        }
+        onDone();
+        create.mutate({ memberId, amount: Number(amount), month: month || undefined, reason });
       }}
     >
       <Field label="Member" htmlFor="adjustment-member" required>
@@ -713,6 +827,8 @@ function ContributionForm({ onCreate, onDone }: { onCreate: CreateContribution; 
   const form = useForm({
     defaultValues: { memberId: "", creditDate: todayInDhaka(), amount: "", note: "" },
     onSubmit: async ({ value }) => {
+      // Close immediately — the row appears optimistically; the API confirms behind a toast.
+      onDone();
       try {
         await onCreate({
           memberId: value.memberId,
@@ -721,9 +837,6 @@ function ContributionForm({ onCreate, onDone }: { onCreate: CreateContribution; 
           creditDate: value.creditDate,
           note: value.note || undefined,
         });
-        form.reset();
-        setBank("");
-        onDone();
       } catch {
         // toast already surfaced by the mutation
       }
