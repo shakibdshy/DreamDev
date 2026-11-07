@@ -465,7 +465,7 @@ function EditAmountDialog({
   const initial = row ? String(Math.abs(row.amount)) : "";
   return (
     <Dialog open={Boolean(row)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent key={row?.id ?? "none"} className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Edit amount</DialogTitle>
           <DialogDescription>
@@ -473,6 +473,7 @@ function EditAmountDialog({
           </DialogDescription>
         </DialogHeader>
         <form
+          key={row?.id ?? "none"}
           className="grid grid-cols-1 gap-4"
           onSubmit={(event) => {
             event.preventDefault();

@@ -402,7 +402,7 @@ function ResetPasswordDialog({ user, onClose }: { user: UserRowData | null; onCl
 
   return (
     <Dialog open={Boolean(user)} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent key={user?.id ?? "none"} className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Reset password</DialogTitle>
           <DialogDescription>{user ? `Set a new password for ${user.name} (${user.email}). Share it with them securely.` : ""}</DialogDescription>
