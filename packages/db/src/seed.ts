@@ -1,4 +1,4 @@
-import { addMonths, monthOfDate } from "./domain/month";
+import { addMonths, monthOfDate, todayInDhaka } from "./domain/month";
 import { createPrismaClient, type Database } from "./index";
 import { ENV } from "./env";
 
@@ -8,7 +8,11 @@ import { ENV } from "./env";
  * Refuses to run against a non-empty database.
  */
 
-const DAY = (month: string, day: number) => new Date(`${month}-${String(day).padStart(2, "0")}T00:00:00Z`);
+/** A day in `month`, clamped to today (Asia/Dhaka) — the seed never creates future-dated records. */
+const DAY = (month: string, day: number) => {
+  const date = `${month}-${String(day).padStart(2, "0")}`;
+  return new Date(`${date > todayInDhaka() ? todayInDhaka() : date}T00:00:00Z`);
+};
 
 export async function seedIfEmpty(db: Database): Promise<{ seeded: boolean; summary: string }> {
   const [members, banks] = await Promise.all([db.member.count(), db.bankAccount.count()]);
