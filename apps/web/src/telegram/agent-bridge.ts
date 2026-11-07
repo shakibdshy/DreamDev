@@ -73,6 +73,18 @@ async function runTurn(stream: AsyncIterable<unknown>) {
   return { text, pause };
 }
 
+/** Keeps the "typing…" bubble alive while a turn runs (Telegram expires it after ~5s). */
+async function withTyping<T>(client: TelegramClient, chatId: string, work: Promise<T>): Promise<T> {
+  const tick = () => void client.sendChatAction(chatId);
+  tick();
+  const timer = setInterval(tick, 4_000);
+  try {
+    return await work;
+  } finally {
+    clearInterval(timer);
+  }
+}
+
 /**
  * The conversation so far, oldest first, as wire messages. Tool rows become
  * synthetic assistant-toolCall + tool-result pairs so the preview gate can see
@@ -89,6 +101,9 @@ async function historyMessages(db: import("@DreamDev/db").Database, userId: stri
   const messages: Record<string, unknown>[] = [];
   for (const row of rows) {
     if (row.role === "tool") {
+      // Only preview rows matter (the confirm gate reads them); old read-tool
+      // JSON would bloat every LLM hop without adding signal.
+      if (!row.toolName?.startsWith("preview_")) continue;
       messages.push({ id: `${row.id}-call`, role: "assistant", content: "", toolCalls: [{ id: row.id, type: "function", function: { name: row.toolName ?? "", arguments: row.toolArgsJson ?? "{}" } }] });
       messages.push({ id: row.id, role: "tool", toolCallId: row.id, content: row.toolResultJson ?? row.content ?? "" });
     } else {
@@ -133,7 +148,19 @@ export async function handleAgentMessage(deps: AgentBridgeDeps, chatId: string, 
   const messages = [...history, { id: `tg-${Date.now()}`, role: "user" as const, content: text }];
   await db.agentMessage.create({ data: { conversationId, role: "user", content: text } });
 
-  const { text: reply, pause } = await runTurn(agentStream({ ctx, params: { messages: messages as never }, adapter: deps.adapter, threadId, conversationId }));
+  let reply: string;
+  let pause: Awaited<ReturnType<typeof runTurn>>["pause"];
+  try {
+    ({ text: reply, pause } = await withTyping(
+      client,
+      chatId,
+      runTurn(await agentStream({ ctx, params: { messages: messages as never }, adapter: deps.adapter, threadId, conversationId })),
+    ));
+  } catch (error) {
+    console.error("Telegram agent turn failed", error);
+    await client.sendMessage(chatId, "Something went wrong on my side — please try again.");
+    return;
+  }
 
   if (pause && pause.messages) {
     await db.agentPausedApproval.create({
@@ -201,26 +228,48 @@ export async function handleApprovalCallback(deps: AgentBridgeDeps, chatId: stri
     return;
   }
 
+  // Ack the tap immediately (Telegram spins the button until answered) and
+  // claim the pause so a double-tap can't execute the write twice.
+  await client.answerCallbackQuery(callbackQueryId, approved ? "Approved." : "Cancelled.");
+  await db.agentPausedApproval.delete({ where: { id: pending.id } });
+
+  // A rejection needs no model hop — the outcome is known and canonical.
+  if (!approved) {
+    const conversationId = await ensureConversation(db, { db, session: sessionFromUser(user), channel: "telegram" }, pending.threadId);
+    await db.agentMessage.create({ data: { conversationId, role: "assistant", content: "Cancelled — nothing was recorded." } });
+    await client.sendMessage(chatId, "Cancelled — nothing was recorded.");
+    return;
+  }
+
   const session = sessionFromUser(user);
   const ctx = { db, session, channel: "telegram" as const };
   const snapshot = JSON.parse(pending.messagesJson);
-  const { text: reply, pause: pauseAgain } = await runTurn(
-    agentStream({
-      ctx,
-      params: {
-        messages: snapshot as never,
-        runId: `tg-resume-${Date.now()}`,
-        parentRunId: pending.interruptedRunId,
-        resume: [{ interruptId: pending.interruptId, status: "resolved", payload: { approved } }] as never,
-      },
-      adapter: deps.adapter!,
-      threadId: pending.threadId,
-      conversationId: (await ensureConversation(db, ctx, pending.threadId)),
-    }),
-  );
-
-  await db.agentPausedApproval.delete({ where: { id: pending.id } });
-  await client.answerCallbackQuery(callbackQueryId, approved ? "Approved." : "Cancelled.");
+  let reply: string;
+  let pauseAgain: Awaited<ReturnType<typeof runTurn>>["pause"];
+  try {
+    ({ text: reply, pause: pauseAgain } = await withTyping(
+      client,
+      chatId,
+      runTurn(
+        await agentStream({
+          ctx,
+          params: {
+            messages: snapshot as never,
+            runId: `tg-resume-${Date.now()}`,
+            parentRunId: pending.interruptedRunId,
+            resume: [{ interruptId: pending.interruptId, status: "resolved", payload: { approved } }] as never,
+          },
+          adapter: deps.adapter!,
+          threadId: pending.threadId,
+          conversationId: (await ensureConversation(db, ctx, pending.threadId)),
+        }),
+      ),
+    ));
+  } catch (error) {
+    console.error("Telegram approval resume failed", error);
+    await client.sendMessage(chatId, "That didn't go through — please ask again.");
+    return;
+  }
 
   // The resume may itself pause on another gated call — re-arm the keyboard.
   if (pauseAgain && pauseAgain.messages) {
@@ -243,5 +292,5 @@ export async function handleApprovalCallback(deps: AgentBridgeDeps, chatId: stri
     return;
   }
 
-  await client.sendMessage(chatId, reply || (approved ? "Done." : "Cancelled — nothing was recorded."));
+  await client.sendMessage(chatId, reply || "Done.");
 }

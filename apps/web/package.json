@@ -30,6 +30,7 @@
     "@tanstack/react-table": "^8.21.3",
     "@varlock/vite-integration": "1.5.4",
     "@vercel/blob": "^2.8.2",
+    "@vercel/functions": "^3.11.0",
     "better-auth": "catalog:",
     "evlog": "^2.33.1",
     "lucide-react": "^1.56.0",

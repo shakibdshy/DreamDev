@@ -219,8 +219,10 @@ export async function contributionPreview(args: {
   amount: number;
   creditDate: string;
 }) {
-  const position = await memberPosition({ db: args.db, session: args.session }, args.memberId);
-  const banks = await listBanks({ db: args.db, session: args.session }, {});
+  const [position, banks] = await Promise.all([
+    memberPosition({ db: args.db, session: args.session }, args.memberId),
+    listBanks({ db: args.db, session: args.session }, {}),
+  ]);
   const bank = banks.data.find((b) => b.id === args.bankAccountId);
   if (!bank) throw new Error("Bank Account not found — call list_banks for valid ids");
   const dueAfter = position.due - args.amount;

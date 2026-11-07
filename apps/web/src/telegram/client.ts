@@ -17,6 +17,7 @@ export interface InlineKeyboard {
 
 export interface TelegramClient {
   sendMessage(chatId: string, text: string, options?: { replyMarkup?: InlineKeyboard }): Promise<TelegramSendResult>;
+  sendChatAction(chatId: string, action?: "typing"): Promise<{ ok: boolean; description?: string }>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<{ ok: boolean; description?: string }>;
   getMe(): Promise<{ ok: boolean; result?: { username?: string }; description?: string }>;
 }
@@ -52,6 +53,10 @@ export function createTelegramClient(token: string, fetchImpl: typeof fetch = fe
       });
       const messageId = (result.result as { message_id?: number } | undefined)?.message_id;
       return { ok: result.ok, messageId, description: result.description };
+    },
+    async sendChatAction(chatId, action = "typing") {
+      const result = await call("sendChatAction", { chat_id: chatId, action });
+      return { ok: result.ok, description: result.description };
     },
     async answerCallbackQuery(callbackQueryId, text) {
       const result = await call("answerCallbackQuery", { callback_query_id: callbackQueryId, ...(text ? { text } : {}) });

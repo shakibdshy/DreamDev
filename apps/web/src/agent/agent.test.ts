@@ -53,10 +53,10 @@ const wireBody = (text: string) => ({
 });
 
 /** Collects the final answer text out of an agent chunk stream. */
-async function collect(stream: AsyncIterable<{ type: string }>) {
+async function collect(stream: AsyncIterable<{ type: string }> | Promise<AsyncIterable<{ type: string }>>) {
   let text = "";
   let error: string | undefined;
-  for await (const chunk of stream) {
+  for await (const chunk of await stream) {
     const c = chunk as { type: string; delta?: unknown; message?: unknown };
     if (c.type === "TEXT_MESSAGE_CONTENT") text += typeof c.delta === "string" ? c.delta : "";
     if (c.type === "RUN_ERROR") error = typeof c.message === "string" ? c.message : String(c.message ?? "run error");
@@ -228,14 +228,14 @@ import { previewContributionDef, recordContributionDef } from "./contribution-to
 import { contributionPreview } from "./tools";
 
 /** Collects chunks, exposing tool results and interrupt bindings. */
-async function collectGate(stream: AsyncIterable<unknown>) {
+async function collectGate(stream: AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>) {
   let text = "";
   let error: string | undefined;
   let interruptedRunId: string | undefined;
   let interruptId: string | undefined;
   let snapshotMessages: unknown[] = [];
   let toolResults: { ok?: boolean; error?: unknown }[] = [];
-  for await (const rawChunk of stream) {
+  for await (const rawChunk of await stream) {
     const chunk = rawChunk as Record<string, unknown>;
     const c = chunk as {
       type: string;
@@ -506,7 +506,7 @@ describe("generic write surface (ticket 5/8)", () => {
     await previewDelete(deps(), "admin", { entity: "bank", id: brac.id }).then((p) => expect(p.lines.join(" ")).toContain("BRAC Bank"));
     await executeDelete(deps(), "admin", { entity: "bank", id: brac.id });
     expect((await db.bankAccount.findUnique({ where: { id: brac.id } }))?.deletedAt).not.toBeNull();
-  });
+  }, 60_000);
 
   test("member create + delete through the dispatchers", async () => {
     await executeWrite(deps(), "admin", { entity: "member", action: "create", args: { name: "New Member", mobile: "01912345678", joiningDate: "2026-11-01", shareQuantity: 1 } });

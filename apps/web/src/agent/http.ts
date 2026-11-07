@@ -59,7 +59,7 @@ export function agentApi(resolve: ApiResolver, options: AgentApiOptions = {}) {
           });
         }
 
-        const stream = agentStream({ ctx, params, adapter, threadId, conversationId });
+        const stream = await agentStream({ ctx, params, adapter, threadId, conversationId });
         return toServerSentEventsResponse(stream);
       } catch (error) {
         if (error instanceof RateLimitError) return errorResponse(new HttpError(429, error.message));

@@ -2,14 +2,15 @@ import type { Database } from "@DreamDev/db";
 
 import { createTelegramClient, type TelegramClient, type TelegramSendResult } from "./client";
 import { optionalEnv } from "@/env-optional";
+import { runAfterResponse } from "@/lib/background";
 
 /**
  * Member notifications (ticket 7/8): on every member-touching write — from
  * the dashboard OR the agent — the affected member (and only that member)
  * gets a templated DM. Records with no member notify nobody. Send failures
  * are logged and retried on the member's next touching write; they never
- * fail the write itself. Awaited rather than fire-and-forget: Vercel kills
- * unawaited work when the handler returns.
+ * fail the write itself. Delivery runs after the response via waitUntil so
+ * the Telegram pipeline never blocks the user's write.
  */
 
 export type MemberEventType =
@@ -181,12 +182,16 @@ export interface NotifyDeps {
 export async function notifyMemberEvent(deps: NotifyDeps, event: MemberEvent): Promise<void> {
   const { db } = deps;
   const client = deps.client ?? activeClient;
-  try {
-    await retryFailedFor(db, client, event.memberId);
-    await deliver(db, client, event);
-  } catch (error) {
-    console.error("notifyMemberEvent failed", error);
-  }
+  await runAfterResponse(
+    (async () => {
+      try {
+        await retryFailedFor(db, client, event.memberId);
+        await deliver(db, client, event);
+      } catch (error) {
+        console.error("notifyMemberEvent failed", error);
+      }
+    })(),
+  );
 }
 
 async function deliver(db: Database, client: TelegramClient | undefined, event: MemberEvent): Promise<void> {

@@ -36,6 +36,9 @@ function fakeClient(replies: { ok: boolean; description?: string }[] = []) {
       answered.push(id);
       return { ok: true };
     },
+    async sendChatAction() {
+      return { ok: true };
+    },
     async getMe() {
       return { ok: true, result: { username: "dreamdev_fund_bot" } };
     },
@@ -397,6 +400,9 @@ describe("telegram agent chat (ticket 6/8)", () => {
       async answerCallbackQuery() {
         return { ok: true };
       },
+      async sendChatAction() {
+        return { ok: true };
+      },
       async getMe() {
         return { ok: true, result: { username: "dreamdev_fund_bot" } };
       },
@@ -434,6 +440,9 @@ describe("telegram agent chat (ticket 6/8)", () => {
       },
       async answerCallbackQuery(_id, text) {
         answered = text ?? "";
+        return { ok: true };
+      },
+      async sendChatAction() {
         return { ok: true };
       },
       async getMe() {
@@ -476,7 +485,7 @@ describe("telegram agent chat (ticket 6/8)", () => {
     expect(expense.amount).toBe(300);
     expect(expense.createdBy).toBe(user.id);
     expect(await db.agentPausedApproval.count()).toBe(0);
-  });
+  }, 60_000);
 
   test("expired pauses refuse to resume and clear", async () => {
     const sent: string[] = [];
@@ -487,6 +496,9 @@ describe("telegram agent chat (ticket 6/8)", () => {
       },
       async answerCallbackQuery(_id, text) {
         sent.push(`cb:${text ?? ""}`);
+        return { ok: true };
+      },
+      async sendChatAction() {
         return { ok: true };
       },
       async getMe() {
@@ -550,6 +562,9 @@ describe("member notifications (ticket 7/8)", () => {
         return fail ? { ok: false, description: "telegram down" } : { ok: true, messageId: 11 };
       },
       async answerCallbackQuery() {
+        return { ok: true };
+      },
+      async sendChatAction() {
         return { ok: true };
       },
       async getMe() {

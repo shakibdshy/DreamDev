@@ -2,9 +2,12 @@ import { chat, maxIterations, type AnyTextAdapter, type ChatMiddleware } from "@
 
 import type { Database } from "@DreamDev/db";
 
+import { listBanks } from "@/api/banks/service";
+import { listMembers } from "@/api/members/service";
+
 import { systemPrompt } from "./prompt";
 import { agentTools } from "./tools";
-import type { AgentContext } from "./context";
+import { serviceDeps, type AgentContext } from "./context";
 
 /**
  * The fund agent: one TanStack AI loop over read-only service tools
@@ -174,7 +177,7 @@ function auditMiddleware(conversationId: string, db: Database): ChatMiddleware<A
  * responsible for auth, rate limiting, and the adapter; the agent loop,
  * system prompt, tools, and audit persisting live here.
  */
-export function agentStream(args: {
+export async function agentStream(args: {
   ctx: AgentContext;
   params: ChatParamsLike;
   adapter: AnyTextAdapter;
@@ -183,6 +186,16 @@ export function agentStream(args: {
   conversationId: string;
 }) {
   const { ctx, params, adapter, threadId, conversationId } = args;
+  // Id/name directory up front: the model resolves names without spending
+  // LLM hops on list_members / list_banks before every write.
+  const [members, banks] = await Promise.all([
+    listMembers(serviceDeps(ctx), { page: 1, pageSize: 100 }),
+    listBanks(serviceDeps(ctx), {}),
+  ]);
+  const directory = {
+    members: members.data.map((m) => ({ id: m.id, name: m.name, status: m.status })),
+    banks: banks.data.map((b) => ({ id: b.id, name: b.bankName })),
+  };
   return chat({
     adapter,
     messages: params.messages,
@@ -190,7 +203,7 @@ export function agentStream(args: {
     ...(params.runId ? { runId: params.runId } : {}),
     ...(params.parentRunId ? { parentRunId: params.parentRunId } : {}),
     ...(params.resume ? { resume: params.resume } : {}),
-    systemPrompts: [systemPrompt(ctx)],
+    systemPrompts: [systemPrompt(ctx, directory)],
     tools: agentTools(ctx.session.user.role === "admin" ? "admin" : "editor"),
     context: ctx,
     agentLoopStrategy: maxIterations(8),

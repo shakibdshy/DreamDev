@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 
 import { optionalEnv } from "@/env-optional";
+import { runAfterResponse } from "@/lib/background";
 
 import { createTelegramClient, type TelegramClient } from "./client";
 import { issuePairingCode, unlinkUser } from "./pairing";
@@ -54,12 +55,14 @@ export function telegramApi(resolve: ApiResolver, options: TelegramApiOptions = 
         adapter: options.getAdapter?.() ?? envAgentAdapter(),
         deduper,
       });
-      try {
-        await handle(update);
-      } catch (error) {
-        // Never signal failure to Telegram — redelivery would fight the deduper.
-        console.error("Telegram update handling failed", error);
-      }
+      // Ack fast — the agent turn (several LLM hops) must not hold Telegram's
+      // connection. waitUntil keeps the function alive until the reply is sent.
+      await runAfterResponse(
+        handle(update).catch((error) => {
+          // Never signal failure to Telegram — redelivery would fight the deduper.
+          console.error("Telegram update handling failed", error);
+        }),
+      );
       return ok({ received: true });
     },
 
