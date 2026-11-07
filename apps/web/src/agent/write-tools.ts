@@ -7,7 +7,7 @@ import { createAdjustment, softDeleteAdjustment, updateAdjustment } from "@/api/
 import { createExpense, softDeleteExpense, updateExpense } from "@/api/ledger/expense";
 import { createTransfer, softDeleteTransfer, updateTransfer } from "@/api/ledger/transfer";
 import { createMember, changeShares, setStatus, softDeleteMember, updateMember } from "@/api/members/service";
-import { createLoan, createRepayment, softDeleteLoan } from "@/api/loans/service";
+import { createLoan, createRepayment, softDeleteLoan, softDeleteRepayment } from "@/api/loans/service";
 import { softDeleteContribution, updateContribution } from "@/api/transactions/service";
 import { todayInDhaka } from "@DreamDev/db/domain/month";
 import { createBankBodySchema, updateBankBodySchema } from "@/api/banks/schema";
@@ -302,7 +302,7 @@ export async function executeWrite(deps: WriteDeps, role: "admin" | "editor", in
   }
 }
 
-const deleteEntities = ["contribution", "loan", "expense", "transfer", "adjustment", "member", "bank"] as const;
+const deleteEntities = ["contribution", "loan", "loan_repayment", "expense", "transfer", "adjustment", "member", "bank"] as const;
 export type DeleteEntity = (typeof deleteEntities)[number];
 
 export function deleteInputSchema(role: "admin" | "editor") {
@@ -329,6 +329,19 @@ export async function previewDelete(deps: WriteDeps, role: "admin" | "editor", i
       const row = await db.loan.findUnique({ where: { id } });
       if (!row || row.deletedAt) throw new Error("Loan not found");
       return { lines: [`Loan: ${taka(row.amount)} to ${await memberName(row.memberId)} from ${await bankName(row.bankAccountId)} on ${day(row.date)}`, "Its repayments are removed too — balances and outstanding recover."] };
+    }
+    case "loan_repayment": {
+      const row = await db.loanRepayment.findUnique({ where: { id } });
+      if (!row || row.deletedAt) throw new Error("Loan Repayment not found");
+      const loan = await db.loan.findUnique({ where: { id: row.loanId } });
+      const repaid = await db.loanRepayment.aggregate({ _sum: { amount: true }, where: { loanId: row.loanId, deletedAt: null } });
+      const outstandingAfter = loan ? Math.max(0, loan.amount - (repaid._sum.amount ?? 0) + row.amount) : null;
+      return {
+        lines: [
+          `Loan repayment: ${taka(row.amount)} from ${await memberName(row.memberId)} on ${day(row.creditDate)}`,
+          ...(loan && outstandingAfter !== null ? [`Loan of ${taka(loan.amount)} — outstanding recovers to ${taka(outstandingAfter)}`] : []),
+        ],
+      };
     }
     case "expense": {
       const row = await db.expense.findUnique({ where: { id } });
@@ -368,6 +381,9 @@ export async function executeDelete(deps: WriteDeps, role: "admin" | "editor", i
       return { deleted: true };
     case "loan":
       await softDeleteLoan(s, input.id);
+      return { deleted: true };
+    case "loan_repayment":
+      await softDeleteRepayment(s, input.id);
       return { deleted: true };
     case "expense":
       await softDeleteExpense(s, input.id);

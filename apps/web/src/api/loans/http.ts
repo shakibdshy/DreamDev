@@ -1,6 +1,6 @@
 import { appContext, ok, readBody, withApi, type ApiResolver } from "../route-helpers";
 
-import { createLoan, createRepayment, memberLoans, softDeleteLoan } from "./service";
+import { createLoan, createRepayment, memberLoans, softDeleteLoan, softDeleteRepayment } from "./service";
 
 /** HTTP handlers for Loans. */
 
@@ -17,6 +17,8 @@ export function loansApi(resolve: ApiResolver) {
       ok(await createRepayment(ctx, params.id, await readBody(request)), 201), resolve),
 
     deleteLoan: withApi(async (ctx, _request, params) => softDeleteLoan(ctx, params.id), resolve),
+
+    deleteRepayment: withApi(async (ctx, _request, params) => softDeleteRepayment(ctx, params.id), resolve),
   };
 }
 

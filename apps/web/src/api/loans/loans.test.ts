@@ -9,7 +9,7 @@ import { futureDay, pastMonth, sessionFor } from "../test-support";
 import { listBanks } from "../banks/service";
 import { createMember } from "../members/service";
 import { createContribution, listFeed } from "../transactions/service";
-import { createLoan, createRepayment, memberLoans, softDeleteLoan } from "./service";
+import { createLoan, createRepayment, memberLoans, softDeleteLoan, softDeleteRepayment } from "./service";
 
 let db: Database;
 let editor: Session;
@@ -119,6 +119,21 @@ describe("loans", () => {
     expect(await balance()).toBe(50000);
     expect((await memberLoans({ db, session: editor }, memberId)).totalOutstanding).toBe(0);
     expect((await listFeed({ db, session: editor }, {})).meta.total).toBe(0);
+  });
+
+  test("softDeleteRepayment removes one repayment; outstanding recovers, loan untouched", async () => {
+    const { loan } = await createLoan({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 10000, date: `${thisMonth}-01` });
+    const first = await createRepayment({ db, session: editor }, loan.id, { bankAccountId: bankId, amount: 4000, creditDate: `${thisMonth}-02` });
+    await createRepayment({ db, session: editor }, loan.id, { bankAccountId: bankId, amount: 3000, creditDate: `${thisMonth}-03` });
+
+    await softDeleteRepayment({ db, session: editor }, first.repayment.id);
+
+    const view = await memberLoans({ db, session: editor }, memberId);
+    expect(view.loans[0]?.repaid).toBe(3000);
+    expect(view.loans[0]?.outstanding).toBe(7000);
+    expect(view.loans[0]?.settled).toBe(false);
+    expect(await db.loan.count({ where: { deletedAt: null } })).toBe(1); // loan untouched
+    await expect(softDeleteRepayment({ db, session: editor }, first.repayment.id)).rejects.toMatchObject({ status: 404 });
   });
 
   test("a loan never exceeds the account's available balance", async () => {

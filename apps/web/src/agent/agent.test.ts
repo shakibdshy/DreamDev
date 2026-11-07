@@ -425,7 +425,7 @@ describe("confirm gate: contribution writes (ticket 4/8)", () => {
 import { executeDelete, executeWrite, previewDelete, previewWrite, writeInputSchema } from "./write-tools";
 import { futureDay } from "../api/test-support";
 import { agentTools } from "./tools";
-import { createLoan, listLoans } from "../api/loans/service";
+import { createLoan, createRepayment, listLoans } from "../api/loans/service";
 import { createContribution } from "../api/transactions/service";
 
 describe("generic write surface (ticket 5/8)", () => {
@@ -629,6 +629,21 @@ describe("loan repayments through chat (spec 2026-11-07)", () => {
     const result = await (tool as unknown as { execute: (input: unknown, ctx: unknown) => Promise<{ entries: { id: string | null }[] }> })
       .execute({}, { context: ctxFor() });
     expect(result.entries[0]?.id).toBeTruthy();
+  });
+
+  test("loan_repayment joins the delete surface with canonical lines", async () => {
+    const { member, bank } = await seedFund();
+    const { loan } = await createLoan({ db, session: adminSession }, { memberId: member.id, bankAccountId: bank.id, amount: 20_000, date: "2026-11-01" });
+    const { repayment } = await createRepayment({ db, session: adminSession }, loan.id, { bankAccountId: bank.id, amount: 8_000, creditDate: "2026-11-01" });
+
+    const preview = await previewDelete(deps(), "admin", { entity: "loan_repayment", id: repayment.id });
+    expect(preview.lines.join(" ")).toContain("8,000");
+    expect(preview.lines.join(" ")).toContain("outstanding recovers to ৳20,000");
+
+    await executeDelete(deps(), "admin", { entity: "loan_repayment", id: repayment.id });
+    expect((await db.loanRepayment.findUnique({ where: { id: repayment.id } }))?.deletedAt).not.toBeNull();
+    expect(await db.loan.count({ where: { deletedAt: null } })).toBe(1); // loan untouched
+    await expect(previewDelete(deps(), "admin", { entity: "loan_repayment", id: repayment.id })).rejects.toThrow("not found");
   });
 });
 

@@ -483,6 +483,7 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
   const [newLoanOpen, setNewLoanOpen] = useState(false);
   const [repaying, setRepaying] = useState<LoanView | null>(null);
   const [removing, setRemoving] = useState<LoanView | null>(null);
+  const [removingRepayment, setRemovingRepayment] = useState<{ repaymentId: string; amount: number; creditDate: string } | null>(null);
 
   const loansQuery = useQuery({
     queryKey: ["loans", memberId],
@@ -501,6 +502,16 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
     onSuccess: () => {
       toast.success("Loan removed");
       setRemoving(null);
+      refresh();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const removeRepayment = useMutation({
+    mutationFn: (repaymentId: string) => api(`/api/loans/repayments/${repaymentId}`, { method: "DELETE" }),
+    onSuccess: () => {
+      toast.success("Repayment removed — loan outstanding recovered");
+      setRemovingRepayment(null);
       refresh();
     },
     onError: (error: Error) => toast.error(error.message),
@@ -601,7 +612,7 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
                   </div>
                   <Progress value={loan.repaid / loan.amount * 100} aria-label={`Loan ${index + 1} repaid`} />
                 </div>
-                <LoanHistory loan={loan} />
+                <LoanHistory loan={loan} onRemove={(repayment) => setRemovingRepayment({ repaymentId: repayment.id, amount: repayment.amount, creditDate: repayment.creditDate })} />
               </article>
             ))}
           </div>
@@ -657,11 +668,32 @@ function LoansSection({ memberId, onSaved }: { memberId: string; onSaved: () => 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={Boolean(removingRepayment)} onOpenChange={(open) => !open && setRemovingRepayment(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Remove this repayment?</DialogTitle>
+            <DialogDescription>
+              {removingRepayment
+                ? `The ${formatTaka(removingRepayment.amount)} repayment from ${formatDay(removingRepayment.creditDate)} will be soft-deleted and the loan's outstanding recovers.`
+                : "This repayment will be soft-deleted."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRemovingRepayment(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" disabled={removeRepayment.isPending} onClick={() => removingRepayment && removeRepayment.mutate(removingRepayment.repaymentId)}>
+              {removeRepayment.isPending ? "Removing…" : "Remove repayment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
 
-function LoanHistory({ loan }: { loan: LoanView }) {
+function LoanHistory({ loan, onRemove }: { loan: LoanView; onRemove: (repayment: { id: string; amount: number; creditDate: string }) => void }) {
   let remaining = loan.amount;
   const history = loan.repayments.map((repayment) => {
     remaining -= repayment.amount;
@@ -691,6 +723,15 @@ function LoanHistory({ loan }: { loan: LoanView }) {
             <div className="text-right">
               <p className="font-medium text-success tabular">{formatTaka(repayment.amount)}</p>
               <p className="text-xs text-muted-foreground tabular">{formatTaka(repayment.remaining)} remaining</p>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs text-muted-foreground hover:text-destructive"
+                aria-label={`Remove repayment of ${formatTaka(repayment.amount)} from ${formatDay(repayment.creditDate)}`}
+                onClick={() => onRemove({ id: repayment.id, amount: repayment.amount, creditDate: repayment.creditDate })}
+              >
+                Remove
+              </Button>
             </div>
           </li>
         ))}

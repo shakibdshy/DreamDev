@@ -32,7 +32,7 @@ export const previewDeleteDef = toolDefinition({
   name: "preview_delete",
   description: "Preview a soft delete before proposing it.",
   inputSchema: z.object({
-    entity: z.enum(["contribution", "loan", "expense", "transfer", "adjustment", "member", "bank"]),
+    entity: z.enum(["contribution", "loan", "loan_repayment", "expense", "transfer", "adjustment", "member", "bank"]),
     id: z.string().min(1),
   }),
   outputSchema: z.object({ lines: z.array(z.string()) }),

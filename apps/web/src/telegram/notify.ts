@@ -20,6 +20,7 @@ export type MemberEventType =
   | "loan_recorded"
   | "loan_deleted"
   | "repayment_recorded"
+  | "repayment_deleted"
   | "adjustment_recorded"
   | "adjustment_updated"
   | "adjustment_deleted"
@@ -42,6 +43,7 @@ const HEADINGS: Record<MemberEventType, string> = {
   loan_recorded: "💸 Loan recorded",
   loan_deleted: "🗑️ Loan removed",
   repayment_recorded: "✅ Loan repayment recorded",
+  repayment_deleted: "🗑️ Loan repayment removed",
   adjustment_recorded: "⚖️ Adjustment recorded",
   adjustment_updated: "✏️ Adjustment updated",
   adjustment_deleted: "🗑️ Adjustment removed",
@@ -84,7 +86,8 @@ export async function buildNotificationBody(db: Database, event: MemberEvent): P
       lines.push(`Outstanding now: ${await outstandingOf(db, event.recordId)}`);
       break;
     }
-    case "repayment_recorded": {
+    case "repayment_recorded":
+    case "repayment_deleted": {
       const row = await db.loanRepayment.findUnique({ where: { id: event.recordId } });
       if (!row) return `${lines[0]} — record no longer available.`;
       lines.push(`Amount: ${taka(row.amount)}`, `Credit Date: ${day(row.creditDate)}`);

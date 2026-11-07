@@ -183,3 +183,13 @@ export async function softDeleteLoan(deps: LoansDeps, loanId: string) {
   await notifyMemberEvent({ db: deps.db }, { memberId: loan.memberId, type: "loan_deleted", recordId: loanId });
   return { ok: true };
 }
+
+/** Soft-deletes one Loan Repayment — outstanding recovers; the Loan itself is untouched. */
+export async function softDeleteRepayment(deps: LoansDeps, repaymentId: string) {
+  requireUser(deps.session);
+  const repayment = await deps.db.loanRepayment.findUnique({ where: { id: repaymentId } });
+  if (!repayment || repayment.deletedAt) throw new HttpError(404, "Repayment not found");
+  await deps.db.loanRepayment.update({ where: { id: repaymentId }, data: { deletedAt: new Date() } });
+  await notifyMemberEvent({ db: deps.db }, { memberId: repayment.memberId, type: "repayment_deleted", recordId: repaymentId });
+  return { ok: true };
+}
