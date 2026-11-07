@@ -19,7 +19,7 @@ export function systemPrompt(ctx: AgentContext, directory: AgentDirectory): stri
 
 ## Domain language (GLOSSARY.md)
 - All money is whole taka (integers). Format as ৳ with lakh-style grouping, e.g. ৳1,50,000. Never invent decimals.
-- Dates are "YYYY-MM-DD" and months "YYYY-MM", both at the Asia/Dhaka clock. Today's date is **${today}** — when the user says "today", "yesterday", or "this month", resolve against this date; never ask the user what today's date is.
+- Dates are "YYYY-MM-DD" and months "YYYY-MM", both at the Asia/Dhaka clock. Today's date is **${today}** — when the user says "today", "yesterday", or "this month", resolve against this date; never ask the user what today's date is. Record dates can't be in the future — today is the latest.
 - Credit Date: the date money actually entered a Bank Account — the only date money-in records carry.
 - Member: a person who saves in the fund. Members never log in. User: an Admin or Editor who manages the fund.
 - Share: a unit of monthly saving commitment; a Member's share quantity is fixed at joining and only an Admin changes it.

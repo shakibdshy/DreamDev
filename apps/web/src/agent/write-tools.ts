@@ -9,6 +9,7 @@ import { createTransfer, softDeleteTransfer, updateTransfer } from "@/api/ledger
 import { createMember, changeShares, setStatus, softDeleteMember, updateMember } from "@/api/members/service";
 import { createLoan, createRepayment, softDeleteLoan } from "@/api/loans/service";
 import { softDeleteContribution, updateContribution } from "@/api/transactions/service";
+import { todayInDhaka } from "@DreamDev/db/domain/month";
 import { createBankBodySchema, updateBankBodySchema } from "@/api/banks/schema";
 import { createAdjustmentBodySchema, updateAdjustmentBodySchema } from "@/api/ledger/adjustment";
 import { createExpenseBodySchema, updateExpenseBodySchema } from "@/api/ledger/expense";
@@ -85,12 +86,12 @@ function assertRoleAllowed(role: "admin" | "editor", input: WriteInput): void {
 }
 
 const SANITY_MAX_AMOUNT = 10_000_000; // ৳1 crore — the spec's tool-layer cap
-const SANITY_MAX_FUTURE_DAYS = 35;
 
 /**
  * Tool-layer sanity caps on top of the service zod (spec guardrail 6): money
- * creates are bounded and Credit Dates can't be wild guesses. Applied in both
- * preview and execute so a hostile proposal never reaches a confirm card.
+ * creates are bounded and record dates can't be in the future (the domain rule
+ * the ledgerDateSchema enforces at the boundary). Applied in both preview and
+ * execute so a hostile proposal never reaches a confirm card.
  */
 function assertSanity(input: WriteInput): void {
   const { amount, date, creditDate } = input.args as { amount?: unknown; date?: unknown; creditDate?: unknown };
@@ -100,12 +101,8 @@ function assertSanity(input: WriteInput): void {
     }
   }
   const rawDate = typeof creditDate === "string" ? creditDate : typeof date === "string" ? date : undefined;
-  if (typeof rawDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawDate)) {
-    const today = new Date();
-    const limit = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + SANITY_MAX_FUTURE_DAYS));
-    if (new Date(`${rawDate}T00:00:00Z`).getTime() > limit.getTime()) {
-      throw new Error(`Dates can be at most ${SANITY_MAX_FUTURE_DAYS} days in the future`);
-    }
+  if (typeof rawDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawDate) && rawDate > todayInDhaka()) {
+    throw new Error("Record dates can't be in the future — use today or earlier (Asia/Dhaka)");
   }
 }
 

@@ -1,6 +1,8 @@
 import { toolDefinition } from "@tanstack/ai";
 import { z } from "zod";
 
+import { todayInDhaka } from "@DreamDev/db/domain/month";
+
 /**
  * Contribution tools shared by the server (bindings in tools.ts) and the chat
  * panel (types for the approval card) — ticket 4/8. The confirm gate: the
@@ -9,18 +11,12 @@ import { z } from "zod";
  */
 
 const MAX_AMOUNT = 10_000_000; // ৳1 crore sanity cap (spec guardrail 6)
-const MAX_FUTURE_DAYS = 35;
 
-/** YYYY-MM-DD at most 35 days in the future (Credit Dates can't be guesses). */
+/** YYYY-MM-DD, today (Asia/Dhaka) or earlier — the domain never records future dates. */
 const creditDateSchema = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
-  .refine((value) => {
-    const today = new Date();
-    const date = new Date(`${value}T00:00:00Z`);
-    const future = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + MAX_FUTURE_DAYS));
-    return date.getTime() <= future.getTime();
-  }, `Credit Date can be at most ${MAX_FUTURE_DAYS} days in the future`);
+  .refine((value) => value <= todayInDhaka(), "Credit Date can't be in the future — use today or earlier");
 
 export const contributionInputSchema = z.object({
   memberId: z.string().min(1).meta({ description: "Member id from list_members" }),

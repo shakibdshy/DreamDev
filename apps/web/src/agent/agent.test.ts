@@ -423,6 +423,7 @@ describe("confirm gate: contribution writes (ticket 4/8)", () => {
 // ---------------------------------------------------------------------------
 
 import { executeDelete, executeWrite, previewDelete, previewWrite, writeInputSchema } from "./write-tools";
+import { futureDay } from "../api/test-support";
 
 describe("generic write surface (ticket 5/8)", () => {
   const deps = () => ({ db, session: adminSession });
@@ -566,6 +567,18 @@ describe("generic write surface (ticket 5/8)", () => {
     expect(await executeWrite(deps(), "admin", { entity: "member", action: "repay", args: {} }).catch((e) => (e as Error).message)).toContain("not available");
     expect(await executeWrite(deps(), "admin", { entity: "bank", action: "repay", args: {} }).catch((e) => (e as Error).message)).toContain("not available");
   });
+
+  test("future record dates are rejected at the sanity layer, before any card", async () => {
+    const { bank } = await seedFund();
+    const tomorrow = futureDay();
+    // The sanity layer's own message (distinct from the service zod's) proves preview fails fast
+    await expect(
+      previewWrite(deps(), "admin", { entity: "expense", action: "create", args: { bankAccountId: bank.id, amount: 100, date: tomorrow } }),
+    ).rejects.toThrow("use today or earlier");
+    await expect(
+      previewWrite(deps(), "admin", { entity: "loan_repayment", action: "repay", id: "any", args: { bankAccountId: bank.id, amount: 100, creditDate: tomorrow } }),
+    ).rejects.toThrow("use today or earlier");
+  });
 });
 
 async function editorSignIn() {
@@ -605,7 +618,7 @@ describe("prompt-injection hardening (ticket 8/8)", () => {
     ];
     for (const input of hostile) {
       const result = await previewWrite(deps(), "admin", input as never).catch((e) => (e as Error).message);
-      expect(String(result)).toMatch(/Amount must|Dates can be|Invalid|expected/);
+      expect(String(result)).toMatch(/Amount must|Dates can be|dates can't be in the future|Invalid|expected/);
     }
   });
 
