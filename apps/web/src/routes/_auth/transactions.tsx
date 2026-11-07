@@ -134,6 +134,9 @@ function TransactionsPage() {
   const deleteEntry = useMutation({
     mutationFn: (row: FeedRow) => api(`/api/${pathFor(row.type)}/${row.id}`, { method: "DELETE" }),
     onMutate: async (row) => {
+      // Close the dialog and hide the row immediately — the API only confirms later.
+      setDeleting(null);
+      toast.loading("Deleting entry…", { id: "delete-entry" });
       await queryClient.cancelQueries({ queryKey: feedQueryKey });
       const previous = queryClient.getQueryData<FeedResponse>(feedQueryKey);
       queryClient.setQueryData<FeedResponse>(feedQueryKey, (old) =>
@@ -143,11 +146,10 @@ function TransactionsPage() {
     },
     onError: (error: Error, _row, context) => {
       if (context?.previous) queryClient.setQueryData(feedQueryKey, context.previous);
-      toast.error(error.message);
+      toast.error(`Could not delete entry: ${error.message}`, { id: "delete-entry" });
     },
     onSuccess: () => {
-      toast.success("Entry deleted");
-      setDeleting(null);
+      toast.success("Entry deleted", { id: "delete-entry" });
     },
     onSettled: afterChange,
   });
@@ -417,8 +419,8 @@ function TransactionsPage() {
             <Button variant="outline" onClick={() => setDeleting(null)}>
               Cancel
             </Button>
-            <Button variant="destructive" disabled={deleteEntry.isPending} onClick={() => deleting && deleteEntry.mutate(deleting)}>
-              {deleteEntry.isPending ? "Deleting…" : "Delete entry"}
+            <Button variant="destructive" onClick={() => deleting && deleteEntry.mutate(deleting)}>
+              Delete entry
             </Button>
           </DialogFooter>
         </DialogContent>

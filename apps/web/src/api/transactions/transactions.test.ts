@@ -134,6 +134,19 @@ describe("unified Transactions feed", () => {
     expect(feed.data[3]?.toBankName).toBe("BRAC");
   });
 
+  test("same-day entries tie-break by creation time — newest first with order=desc", async () => {
+    const earlier = await createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 1000, creditDate: thisDay(thisMonth, 2) });
+    const later = await createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 2000, creditDate: thisDay(thisMonth, 2) });
+
+    const desc = await listFeed({ db, session: editor }, { order: "desc", pageSize: 50 });
+    const descIds = desc.data.map((e) => e.id);
+    expect(descIds.indexOf(later.id)).toBeLessThan(descIds.indexOf(earlier.id));
+
+    const asc = await listFeed({ db, session: editor }, { order: "asc", pageSize: 50 });
+    const ascIds = asc.data.map((e) => e.id);
+    expect(ascIds.indexOf(earlier.id)).toBeLessThan(ascIds.indexOf(later.id));
+  });
+
   test("filters by type, member, bank and date range; paginates", async () => {
     const a = await createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 5000, creditDate: `${thisMonth}-01` });
     await createContribution({ db, session: editor }, { memberId, bankAccountId: bankId2, amount: 3000, creditDate: `${thisMonth}-05` });

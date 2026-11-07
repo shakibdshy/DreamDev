@@ -19,6 +19,8 @@ export interface FeedEntry {
   id: string;
   type: "contribution" | "loan" | "loan_repayment" | "expense" | "transfer" | "adjustment";
   date: string; // YYYY-MM-DD
+  /** Creation time — the same-day tie-break (ids are random uuids, not creation-ordered). */
+  createdAt: string; // ISO
   /** Signed from the fund's perspective: money in positive, money out negative; Adjustments as stored. */
   amount: number;
   memberId: string | null;
@@ -90,6 +92,7 @@ export async function listFeed(deps: TxnDeps, query: unknown) {
         id: c.id,
         type: "contribution",
         date: day(c.creditDate),
+        createdAt: c.createdAt.toISOString(),
         amount: c.amount,
         memberId: c.memberId,
         memberName: memberName.get(c.memberId) ?? null,
@@ -103,6 +106,7 @@ export async function listFeed(deps: TxnDeps, query: unknown) {
         id: l.id,
         type: "loan",
         date: day(l.date),
+        createdAt: l.createdAt.toISOString(),
         amount: -l.amount,
         memberId: l.memberId,
         memberName: memberName.get(l.memberId) ?? null,
@@ -116,6 +120,7 @@ export async function listFeed(deps: TxnDeps, query: unknown) {
         id: r.id,
         type: "loan_repayment",
         date: day(r.creditDate),
+        createdAt: r.createdAt.toISOString(),
         amount: r.amount,
         memberId: r.memberId,
         memberName: memberName.get(r.memberId) ?? null,
@@ -129,6 +134,7 @@ export async function listFeed(deps: TxnDeps, query: unknown) {
         id: e.id,
         type: "expense",
         date: day(e.date),
+        createdAt: e.createdAt.toISOString(),
         amount: -e.amount,
         memberId: null,
         memberName: null,
@@ -142,6 +148,7 @@ export async function listFeed(deps: TxnDeps, query: unknown) {
         id: t.id,
         type: "transfer",
         date: day(t.date),
+        createdAt: t.createdAt.toISOString(),
         amount: -t.amount,
         memberId: null,
         memberName: null,
@@ -155,6 +162,7 @@ export async function listFeed(deps: TxnDeps, query: unknown) {
         id: a.id,
         type: "adjustment",
         date: a.month ? `${a.month}-15` : day(a.createdAt),
+        createdAt: a.createdAt.toISOString(),
         amount: a.amount,
         memberId: a.memberId,
         memberName: memberName.get(a.memberId) ?? null,
@@ -167,7 +175,14 @@ export async function listFeed(deps: TxnDeps, query: unknown) {
 
   // Adjustments carry their own dates — apply the date range uniformly in the merge
   const ranged = entries.filter((e) => (!from || e.date >= from) && (!to || e.date <= to));
-  ranged.sort((a, b) => (a.date === b.date ? a.id.localeCompare(b.id) : order === "asc" ? a.date.localeCompare(b.date) : b.date.localeCompare(a.date)));
+  // Date first; same-day ties break on creation time (random uuids tell nothing), id as final anchor.
+  const dir = order === "asc" ? 1 : -1;
+  ranged.sort((a, b) => {
+    if (a.date !== b.date) return dir * a.date.localeCompare(b.date);
+    const byCreation = a.createdAt.localeCompare(b.createdAt);
+    if (byCreation !== 0) return dir * byCreation;
+    return dir * a.id.localeCompare(b.id);
+  });
 
   const total = ranged.length;
   const data = ranged.slice((page - 1) * pageSize, page * pageSize);
