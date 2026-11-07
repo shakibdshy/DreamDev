@@ -487,6 +487,60 @@ describe("telegram agent chat (ticket 6/8)", () => {
     expect(await db.agentPausedApproval.count()).toBe(0);
   }, 60_000);
 
+  test("history keeps gated write pairs, trims read tools, and windows the newest rows", async () => {
+    const { bank } = await seedFundTg();
+    const user = { id: adminSession.user.id, role: "admin" as const, status: "active" };
+    const conversation = await db.agentConversation.create({ data: { userId: user.id, threadId: `telegram-${user.id}`, channel: "telegram" } });
+    const proposal = { entity: "expense", action: "create", args: { bankAccountId: bank.id, amount: 300, date: "2026-11-03" } };
+    // 45 filler rows overflow the 40-row window; the grounded flow is newer.
+    await db.agentMessage.createMany({ data: Array.from({ length: 45 }, (_, i) => ({ conversationId: conversation.id, role: "user", content: `ancient filler ${i}` })) });
+    await db.agentMessage.create({ data: { conversationId: conversation.id, role: "tool", content: "", toolName: "fund_overview", toolArgsJson: "{}", toolResultJson: "{\"total\":1}" } });
+    await db.agentMessage.create({ data: { conversationId: conversation.id, role: "tool", content: "", toolName: "preview_write", toolArgsJson: JSON.stringify(proposal), toolResultJson: "{\"lines\":[\"Expense: ৳300\"]}" } });
+    await db.agentMessage.create({ data: { conversationId: conversation.id, role: "tool", content: "", toolName: "write_record", toolArgsJson: JSON.stringify(proposal), toolResultJson: "{\"recorded\":true}" } });
+    await db.agentMessage.create({ data: { conversationId: conversation.id, role: "assistant", content: "✅ Recorded the expense." } });
+
+    const sent: { text: string; markup?: unknown }[] = [];
+    const client: TelegramClient = {
+      async sendMessage(_chatId, text, options) {
+        sent.push({ text, markup: options?.replyMarkup });
+        return { ok: true, messageId: 5 };
+      },
+      async answerCallbackQuery() {
+        return { ok: true };
+      },
+      async sendChatAction() {
+        return { ok: true };
+      },
+      async getMe() {
+        return { ok: true, result: { username: "dreamdev_fund_bot" } };
+      },
+    };
+    type WireMessage = { role?: string; content?: unknown; toolCalls?: { name?: string; function?: { name?: string } }[] };
+    let seen: WireMessage[] = [];
+    const fake = fakeText();
+    fake.setResponses([
+      (call) => {
+        seen = call.request.messages as WireMessage[];
+        return { toolCalls: [{ name: "write_record", input: proposal }] };
+      },
+    ]);
+
+    await handleAgentMessage({ db, client, adapter: fake }, "888", "record the same expense again", user);
+
+    const names = seen.flatMap((m) => (m.toolCalls ?? []).map((c) => c.function?.name ?? c.name));
+    const textOf = (m: WireMessage) =>
+      typeof m.content === "string" ? m.content : Array.isArray(m.content) ? (m.content as { text?: string; content?: string }[]).map((p) => p.text ?? p.content ?? "").join("") : "";
+    expect(names).toContain("preview_write");
+    expect(names).toContain("write_record"); // the write half of past flows stays visible
+    expect(names).not.toContain("fund_overview"); // read-tool JSON is trimmed
+    expect(seen.filter((m) => textOf(m).startsWith("ancient filler"))).toHaveLength(36); // newest 40-row window: 36 filler + 3 tool rows + 1 assistant
+    expect(seen.some((m) => textOf(m) === "✅ Recorded the expense.")).toBe(true);
+    // The preview carried in history unlocks the gate; the proposal still pauses.
+    expect(await db.expense.count()).toBe(0);
+    expect(await db.agentPausedApproval.count()).toBe(1);
+    expect(sent.at(-1)?.markup).toBeTruthy();
+  }, 60_000);
+
   test("expired pauses refuse to resume and clear", async () => {
     const sent: string[] = [];
     const client: TelegramClient = {

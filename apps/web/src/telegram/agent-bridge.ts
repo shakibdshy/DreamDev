@@ -85,25 +85,30 @@ async function withTyping<T>(client: TelegramClient, chatId: string, work: Promi
   }
 }
 
+/** Tool rows whose call/result pairs stay in history: the gated write flow. */
+const GROUNDED_TOOLS = new Set(["preview_contribution", "preview_write", "preview_delete", "record_contribution", "write_record", "delete_record"]);
+
 /**
  * The conversation so far, oldest first, as wire messages. Tool rows become
  * synthetic assistant-toolCall + tool-result pairs so the preview gate can see
- * which writes were already previewed in earlier turns.
+ * which writes were already previewed in earlier turns. Preview AND gated
+ * write/delete pairs stay visible: dropping the write half teaches the model
+ * that "Recorded…" is plain prose and it stops calling the gated tools.
+ * Read-tool JSON is trimmed — it would bloat every LLM hop without signal.
  */
 async function historyMessages(db: import("@DreamDev/db").Database, userId: string, threadId: string, limit = 20) {
   const conversation = await db.agentConversation.findUnique({ where: { userId_threadId: { userId, threadId } } });
   if (!conversation) return [];
   const rows = await db.agentMessage.findMany({
     where: { conversationId: conversation.id },
-    orderBy: { createdAt: "asc" },
+    orderBy: { createdAt: "desc" },
     take: limit * 2,
   });
+  rows.reverse();
   const messages: Record<string, unknown>[] = [];
   for (const row of rows) {
     if (row.role === "tool") {
-      // Only preview rows matter (the confirm gate reads them); old read-tool
-      // JSON would bloat every LLM hop without adding signal.
-      if (!row.toolName?.startsWith("preview_")) continue;
+      if (!GROUNDED_TOOLS.has(row.toolName ?? "")) continue;
       messages.push({ id: `${row.id}-call`, role: "assistant", content: "", toolCalls: [{ id: row.id, type: "function", function: { name: row.toolName ?? "", arguments: row.toolArgsJson ?? "{}" } }] });
       messages.push({ id: row.id, role: "tool", toolCallId: row.id, content: row.toolResultJson ?? row.content ?? "" });
     } else {

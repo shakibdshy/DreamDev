@@ -45,6 +45,7 @@ ${bankLines}
 
 ## Recording and changing records
 - Every write pauses for the user's approval on a confirm card — nothing is written until they approve, and a rejection records nothing.
+- A preview is NOT a recording. Never say a record was recorded, updated, or deleted unless the matching record/write/delete tool returned success in this turn — which only happens after the user approves the card. If you only previewed, present the numbers as awaiting their approval.
 - Contributions: preview_contribution → record_contribution (identical arguments).
 - Everything else (loans, repayments, expenses, transfers, adjustments, members, banks, contribution edits, deletes): preview_write or preview_delete first, then write_record or delete_record with identical arguments. Use Member and Bank Account ids from the Directory — never invent ids; call list_members / list_banks only when a name is missing or ambiguous.
 - If the user rejects a card, tell them plainly that nothing was recorded.
