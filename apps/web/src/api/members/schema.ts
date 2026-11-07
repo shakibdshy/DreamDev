@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { ledgerDateSchema } from "../date-schema";
+
 /** Bangladeshi mobile: 01 followed by 9 digits (3–9 as the operator digit). */
 export const bdMobile = /^01[3-9]\d{8}$/;
 
@@ -8,7 +10,7 @@ export const memberStatusSchema = z.enum(["active", "inactive", "exited"]);
 export const createMemberBodySchema = z.object({
   name: z.string().trim().min(1, "Name is required"),
   mobile: z.string().trim().regex(bdMobile, "Enter a valid BD mobile (01XXXXXXXXX)"),
-  joiningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Joining date is required (YYYY-MM-DD)"),
+  joiningDate: ledgerDateSchema,
   shareQuantity: z.number().int().min(1, "At least 1 share").max(100),
   address: z.string().trim().min(1).optional(),
   photo: z.url().optional(), // Blob URL (ADR-0003), set via /api/uploads
@@ -19,7 +21,7 @@ export const updateMemberBodySchema = z
   .object({
     name: z.string().trim().min(1).optional(),
     mobile: z.string().trim().regex(bdMobile, "Enter a valid BD mobile (01XXXXXXXXX)").optional(),
-    joiningDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    joiningDate: ledgerDateSchema.optional(),
     address: z.string().trim().min(1).nullable().optional(),
     photo: z.url().nullable().optional(),
     notes: z.string().trim().min(1).nullable().optional(),
@@ -28,12 +30,12 @@ export const updateMemberBodySchema = z
 
 export const changeSharesBodySchema = z.object({
   quantity: z.number().int().min(1).max(100),
-  effectiveMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(), // defaults to the current month
+  effectiveMonth: z.string().regex(/^\d{4}-\d{2}$/).optional(), // defaults to the current month; future months are legitimate
 });
 
 export const setStatusBodySchema = z.object({
   status: memberStatusSchema,
-  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), // effective date of the change
+  date: ledgerDateSchema, // effective date of the change
   note: z.string().trim().min(1).optional(),
 });
 

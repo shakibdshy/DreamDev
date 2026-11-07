@@ -4,15 +4,14 @@ import { z } from "zod";
 
 import { HttpError, parseOr422, requireUser } from "../http";
 import { assertMoneyOutCovers } from "../banks/service";
+import { ledgerDateSchema } from "../date-schema";
 
 /** Expense: money out that isn't a Loan — bank charges, cash withdrawals (GLOSSARY.md). */
-
-const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
 
 export const createExpenseBodySchema = z.object({
   bankAccountId: z.string().min(1),
   amount: z.number().int().min(1, "Amount must be at least ৳1"),
-  date: dateString,
+  date: ledgerDateSchema,
   note: z.string().trim().min(1).optional(),
 });
 
@@ -20,7 +19,7 @@ export const updateExpenseBodySchema = z
   .object({
     bankAccountId: z.string().min(1).optional(),
     amount: z.number().int().min(1).optional(),
-    date: dateString.optional(),
+    date: ledgerDateSchema.optional(),
     note: z.string().trim().min(1).nullable().optional(),
   })
   .refine((body) => Object.values(body).some((v) => v !== undefined), { message: "Nothing to update" });

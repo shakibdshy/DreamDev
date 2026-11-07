@@ -3,9 +3,9 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 import { setupTestDb, resetDb } from "@DreamDev/db/test/harness";
-import { addMonths, monthOfDate } from "@DreamDev/db/domain/month";
+import { addMonths, monthOfDate, todayInDhaka } from "@DreamDev/db/domain/month";
 
-import { sessionFor } from "../test-support";
+import { futureDay, sessionFor, thisDay } from "../test-support";
 import { changeShares, createMember, getMember, listMembers, purgeMember, setStatus, softDeleteMember, updateMember } from "./service";
 
 let db: Database;
@@ -108,7 +108,7 @@ describe("members", () => {
     expect((await listMembers({ db, session: editor }, {})).data[0]?.due).toBe(5000); // this month only
 
     // Exit this month: billing stops at this month (inclusive); future never bills
-    const exited = await setStatus({ db, session: admin }, member.id, { status: "exited", date: `${thisMonth}-15` });
+    const exited = await setStatus({ db, session: admin }, member.id, { status: "exited", date: thisDay(thisMonth, 15) });
     expect(exited.status).toBe("exited");
     expect(exited.exitDate).toBeTruthy();
     expect((await listMembers({ db, session: editor }, {})).data[0]?.due).toBe(5000);
@@ -161,5 +161,13 @@ describe("members", () => {
   test("requires authentication", async () => {
     await expect(listMembers({ db, session: null }, {})).rejects.toMatchObject({ status: 401 });
     await expect(createMember({ db, session: null }, memberBody())).rejects.toMatchObject({ status: 401 });
+  });
+
+  test("joining and status dates can't be in the future (Asia/Dhaka)", async () => {
+    const tomorrow = futureDay();
+    await expect(createMember({ db, session: editor }, memberBody({ joiningDate: tomorrow }))).rejects.toMatchObject({ status: 422 });
+    const member = await createMember({ db, session: editor }, memberBody());
+    await expect(setStatus({ db, session: admin }, member.id, { status: "inactive", date: tomorrow })).rejects.toMatchObject({ status: 422 });
+    await setStatus({ db, session: editor }, member.id, { status: "inactive", date: todayInDhaka() }); // today is fine
   });
 });

@@ -5,7 +5,7 @@ import type { Database } from "@DreamDev/db";
 import { setupTestDb, resetDb } from "@DreamDev/db/test/harness";
 import { addMonths, monthOfDate } from "@DreamDev/db/domain/month";
 
-import { sessionFor } from "../test-support";
+import { sessionFor, thisDay } from "../test-support";
 import { listBanks } from "../banks/service";
 import { createMember } from "../members/service";
 import { createContribution } from "../transactions/service";
@@ -52,14 +52,14 @@ describe("dashboard", () => {
 
     // Rahim: paid last month fully, this month partial (10k of 10k + 5k of 5k… see amounts below)
     await createContribution({ db, session: admin }, { memberId: rahim.id, bankAccountId: bank.id, amount: 10000, creditDate: `${lastMonth}-10` });
-    await createContribution({ db, session: admin }, { memberId: rahim.id, bankAccountId: bank.id, amount: 8000, creditDate: `${thisMonth}-10` });
-    await createContribution({ db, session: admin }, { memberId: karim.id, bankAccountId: bank.id, amount: 6000, creditDate: `${thisMonth}-12` });
+    await createContribution({ db, session: admin }, { memberId: rahim.id, bankAccountId: bank.id, amount: 8000, creditDate: thisDay(thisMonth, 10) });
+    await createContribution({ db, session: admin }, { memberId: karim.id, bankAccountId: bank.id, amount: 6000, creditDate: thisDay(thisMonth, 12) });
 
     // Karim took a 20,000 loan and repaid 5,000
-    const loan = (await createLoan({ db, session: admin }, { memberId: karim.id, bankAccountId: bank.id, amount: 20000, date: `${thisMonth}-05` })).loan;
-    await createRepayment({ db, session: admin }, loan.id, { bankAccountId: bank.id, amount: 5000, creditDate: `${thisMonth}-15` });
+    const loan = (await createLoan({ db, session: admin }, { memberId: karim.id, bankAccountId: bank.id, amount: 20000, date: thisDay(thisMonth, 5) })).loan;
+    await createRepayment({ db, session: admin }, loan.id, { bankAccountId: bank.id, amount: 5000, creditDate: thisDay(thisMonth, 15) });
 
-    await createExpense({ db, session: admin }, { bankAccountId: bank.id, amount: 500, date: `${thisMonth}-20`, note: "charge" });
+    await createExpense({ db, session: admin }, { bankAccountId: bank.id, amount: 500, date: thisDay(thisMonth, 20), note: "charge" });
 
     const data = await dashboard({ db, session: admin }, undefined);
 

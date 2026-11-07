@@ -1,15 +1,18 @@
 import { z } from "zod";
 
+import { ledgerDateSchema } from "../date-schema";
+
 export const FEED_TYPES = ["contribution", "loan", "loan_repayment", "expense", "transfer", "adjustment"] as const;
 export type FeedType = (typeof FEED_TYPES)[number];
 
+// Feed date filters stay unbounded — only record creation bounds dates to today.
 const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
 
 export const createContributionBodySchema = z.object({
   memberId: z.string().min(1),
   bankAccountId: z.string().min(1),
   amount: z.number().int().min(1, "Amount must be at least ৳1"),
-  creditDate: dateString,
+  creditDate: ledgerDateSchema,
   note: z.string().trim().min(1).optional(),
 });
 
@@ -17,7 +20,7 @@ export const updateContributionBodySchema = z
   .object({
     bankAccountId: z.string().min(1).optional(),
     amount: z.number().int().min(1).optional(),
-    creditDate: dateString.optional(),
+    creditDate: ledgerDateSchema.optional(),
     note: z.string().trim().min(1).nullable().optional(),
   })
   .refine((body) => Object.values(body).some((v) => v !== undefined), { message: "Nothing to update" });

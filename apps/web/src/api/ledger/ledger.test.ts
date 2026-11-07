@@ -3,9 +3,9 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 import { setupTestDb, resetDb } from "@DreamDev/db/test/harness";
-import { monthOfDate } from "@DreamDev/db/domain/month";
+import { monthOfDate, todayInDhaka } from "@DreamDev/db/domain/month";
 
-import { sessionFor } from "../test-support";
+import { futureDay, sessionFor, thisDay } from "../test-support";
 import { listBanks } from "../banks/service";
 import { createMember } from "../members/service";
 import { listFeed, memberPosition } from "../transactions/service";
@@ -42,7 +42,7 @@ beforeEach(async () => {
 
 describe("expenses", () => {
   test("reduces the balance, appears in the feed, edits and soft-deletes cleanly", async () => {
-    const expense = await createExpense({ db, session: editor }, { bankAccountId: bankA, amount: 500, date: `${thisMonth}-10`, note: "bank charge" });
+    const expense = await createExpense({ db, session: editor }, { bankAccountId: bankA, amount: 500, date: thisDay(thisMonth, 10), note: "bank charge" });
     expect((await balances())["A"]).toBe(19500);
     expect((await listFeed({ db, session: editor }, { type: "expense" })).data[0]?.amount).toBe(-500);
 
@@ -56,20 +56,27 @@ describe("expenses", () => {
 
   test("never exceeds the account's available balance — on create and on edit", async () => {
     await expect(
-      createExpense({ db, session: editor }, { bankAccountId: bankB, amount: 6000, date: `${thisMonth}-10` }),
+      createExpense({ db, session: editor }, { bankAccountId: bankB, amount: 6000, date: thisDay(thisMonth, 10) }),
     ).rejects.toMatchObject({ status: 422 });
 
-    const expense = await createExpense({ db, session: editor }, { bankAccountId: bankA, amount: 19000, date: `${thisMonth}-10` });
+    const expense = await createExpense({ db, session: editor }, { bankAccountId: bankA, amount: 19000, date: thisDay(thisMonth, 10) });
     // 19,000 of 20,000 spent — growing the expense past the remaining 1,000 must fail
     await expect(updateExpense({ db, session: editor }, expense.id, { amount: 21000 })).rejects.toMatchObject({ status: 422 });
     await updateExpense({ db, session: editor }, expense.id, { amount: 20000 });
     expect((await balances())["A"]).toBe(0);
   });
+
+  test("expense and transfer dates can't be in the future (Asia/Dhaka)", async () => {
+    const tomorrow = futureDay();
+    await expect(createExpense({ db, session: editor }, { bankAccountId: bankA, amount: 500, date: tomorrow })).rejects.toMatchObject({ status: 422 });
+    await expect(createTransfer({ db, session: editor }, { fromAccountId: bankA, toAccountId: bankB, amount: 500, date: tomorrow })).rejects.toMatchObject({ status: 422 });
+    await createExpense({ db, session: editor }, { bankAccountId: bankA, amount: 500, date: todayInDhaka() }); // today is fine
+  });
 });
 
 describe("transfers", () => {
   test("moves money between the team's own accounts — total holdings unchanged", async () => {
-    await createTransfer({ db, session: editor }, { fromAccountId: bankA, toAccountId: bankB, amount: 3000, date: `${thisMonth}-10` });
+    await createTransfer({ db, session: editor }, { fromAccountId: bankA, toAccountId: bankB, amount: 3000, date: thisDay(thisMonth, 10) });
     const after = await balances();
     expect(after["A"]).toBe(17000);
     expect(after["B"]).toBe(8000);
@@ -82,18 +89,18 @@ describe("transfers", () => {
 
   test("requires two different accounts", async () => {
     await expect(
-      createTransfer({ db, session: editor }, { fromAccountId: bankA, toAccountId: bankA, amount: 1000, date: `${thisMonth}-10` }),
+      createTransfer({ db, session: editor }, { fromAccountId: bankA, toAccountId: bankA, amount: 1000, date: thisDay(thisMonth, 10) }),
     ).rejects.toMatchObject({ status: 422 });
   });
 
   test("never exceeds the from-account's available balance", async () => {
     await expect(
-      createTransfer({ db, session: editor }, { fromAccountId: bankB, toAccountId: bankA, amount: 6000, date: `${thisMonth}-10` }),
+      createTransfer({ db, session: editor }, { fromAccountId: bankB, toAccountId: bankA, amount: 6000, date: thisDay(thisMonth, 10) }),
     ).rejects.toMatchObject({ status: 422 });
   });
 
   test("soft-delete restores both sides", async () => {
-    const transfer = await createTransfer({ db, session: editor }, { fromAccountId: bankA, toAccountId: bankB, amount: 3000, date: `${thisMonth}-10` });
+    const transfer = await createTransfer({ db, session: editor }, { fromAccountId: bankA, toAccountId: bankB, amount: 3000, date: thisDay(thisMonth, 10) });
     await softDeleteTransfer({ db, session: editor }, transfer.id);
     const after = await balances();
     expect(after["A"]).toBe(20000);

@@ -3,9 +3,9 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 import { setupTestDb, resetDb } from "@DreamDev/db/test/harness";
-import { monthOfDate } from "@DreamDev/db/domain/month";
+import { monthOfDate, todayInDhaka } from "@DreamDev/db/domain/month";
 
-import { sessionFor } from "../test-support";
+import { futureDay, sessionFor, thisDay } from "../test-support";
 import { listBanks } from "../banks/service";
 import { createMember } from "../members/service";
 import { createContribution, listFeed, memberPosition, softDeleteContribution, updateContribution } from "./service";
@@ -39,7 +39,7 @@ describe("contributions", () => {
   test("creates with the Share Price and quantity snapshot at entry", async () => {
     const created = await createContribution(
       { db, session: editor },
-      { memberId, bankAccountId: bankId, amount: 5000, creditDate: `${thisMonth}-10` },
+      { memberId, bankAccountId: bankId, amount: 5000, creditDate: thisDay(thisMonth, 10) },
     );
     expect(created.sharePriceAtEntry).toBe(5000);
     expect(created.shareQtyAtEntry).toBe(1);
@@ -52,7 +52,7 @@ describe("contributions", () => {
     const before = await memberPosition({ db, session: editor }, memberId);
     expect(before.due).toBe(5000);
 
-    await createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 6000, creditDate: `${thisMonth}-10` });
+    await createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 6000, creditDate: thisDay(thisMonth, 10) });
     const after = await memberPosition({ db, session: editor }, memberId);
     expect(after.due).toBe(-1000);
     expect(after.advance).toBe(1000);
@@ -61,7 +61,7 @@ describe("contributions", () => {
   test("edit updates the amount with audit; soft-delete removes the entry and its effects", async () => {
     const created = await createContribution(
       { db, session: editor },
-      { memberId, bankAccountId: bankId, amount: 5000, creditDate: `${thisMonth}-10` },
+      { memberId, bankAccountId: bankId, amount: 5000, creditDate: thisDay(thisMonth, 10) },
     );
 
     const updated = await updateContribution({ db, session: editor }, created.id, { amount: 6500 });
@@ -88,14 +88,26 @@ describe("contributions", () => {
 
   test("validates member, bank, amount and auth", async () => {
     await expect(
-      createContribution({ db, session: null }, { memberId, bankAccountId: bankId, amount: 5000, creditDate: `${thisMonth}-10` }),
+      createContribution({ db, session: null }, { memberId, bankAccountId: bankId, amount: 5000, creditDate: thisDay(thisMonth, 10) }),
     ).rejects.toMatchObject({ status: 401 });
     await expect(
-      createContribution({ db, session: editor }, { memberId: "nope", bankAccountId: bankId, amount: 5000, creditDate: `${thisMonth}-10` }),
+      createContribution({ db, session: editor }, { memberId: "nope", bankAccountId: bankId, amount: 5000, creditDate: thisDay(thisMonth, 10) }),
     ).rejects.toMatchObject({ status: 404 });
     await expect(
-      createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 0, creditDate: `${thisMonth}-10` }),
+      createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 0, creditDate: thisDay(thisMonth, 10) }),
     ).rejects.toMatchObject({ status: 422 });
+  });
+
+  test("credit dates can't be in the future (Asia/Dhaka)", async () => {
+    const tomorrow = futureDay();
+    await expect(
+      createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 1000, creditDate: tomorrow }),
+    ).rejects.toMatchObject({ status: 422 });
+    const created = await createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 1000, creditDate: todayInDhaka() });
+    await expect(
+      updateContribution({ db, session: editor }, created.id, { creditDate: tomorrow }),
+    ).rejects.toMatchObject({ status: 422 });
+    await updateContribution({ db, session: editor }, created.id, { creditDate: todayInDhaka() }); // today is fine
   });
 });
 

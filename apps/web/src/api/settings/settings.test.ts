@@ -5,7 +5,7 @@ import type { Database } from "@DreamDev/db";
 import { setupTestDb, resetDb } from "@DreamDev/db/test/harness";
 import { addMonths, monthOfDate } from "@DreamDev/db/domain/month";
 
-import { sessionFor } from "../test-support";
+import { sessionFor, thisDay } from "../test-support";
 import { createMember, listMembers } from "../members/service";
 import { createContribution } from "../transactions/service";
 import { getSharePrice, updateSharePrice } from "./service";
@@ -70,7 +70,7 @@ describe("settings (Share Price)", () => {
     // New Contributions snapshot the new price
     const newContribution = await createContribution(
       { db, session: admin },
-      { memberId: member.id, bankAccountId: bank.id, amount: 6000, creditDate: `${thisMonth}-10` },
+      { memberId: member.id, bankAccountId: bank.id, amount: 6000, creditDate: thisDay(thisMonth, 10) },
     );
     expect(newContribution.sharePriceAtEntry).toBe(6000);
 
