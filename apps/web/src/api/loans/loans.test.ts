@@ -3,9 +3,9 @@ import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 import { setupTestDb, resetDb } from "@DreamDev/db/test/harness";
-import { monthOfDate } from "@DreamDev/db/domain/month";
+import { todayInDhaka } from "@DreamDev/db/domain/month";
 
-import { sessionFor } from "../test-support";
+import { futureDay, pastMonth, sessionFor } from "../test-support";
 import { listBanks } from "../banks/service";
 import { createMember } from "../members/service";
 import { createContribution, listFeed } from "../transactions/service";
@@ -13,7 +13,7 @@ import { createLoan, createRepayment, memberLoans, softDeleteLoan } from "./serv
 
 let db: Database;
 let editor: Session;
-const thisMonth = monthOfDate(new Date());
+const thisMonth = pastMonth();
 
 let memberId: string;
 let bankId: string;
@@ -137,5 +137,19 @@ describe("loans", () => {
     await expect(
       createLoan({ db, session: editor }, { memberId: "nope", bankAccountId: bankId, amount: 100, date: `${thisMonth}-10` }),
     ).rejects.toMatchObject({ status: 404 });
+  });
+
+  test("record dates can't be in the future (Asia/Dhaka)", async () => {
+    await createContribution({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 5000, creditDate: `${thisMonth}-05` });
+    const tomorrow = futureDay();
+    await expect(
+      createLoan({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 8000, date: tomorrow }),
+    ).rejects.toMatchObject({ status: 422 });
+
+    const { loan } = await createLoan({ db, session: editor }, { memberId, bankAccountId: bankId, amount: 8000, date: todayInDhaka() });
+    await expect(
+      createRepayment({ db, session: editor }, loan.id, { bankAccountId: bankId, amount: 1000, creditDate: tomorrow }),
+    ).rejects.toMatchObject({ status: 422 });
+    await createRepayment({ db, session: editor }, loan.id, { bankAccountId: bankId, amount: 1000, creditDate: todayInDhaka() }); // today is fine
   });
 });
