@@ -52,10 +52,10 @@ flowchart LR
     SVC --> PRISMA[(Prisma +<br/>Prisma Postgres)]
     AGENT --> TG[Telegram webhook<br/>pairing · notify · resume]
     subgraph pkgs["packages"]
-        DB[@DreamDev/db — schema + pure domain]
-        AUTH[@DreamDev/auth — Better Auth]
-        UIPKG[@DreamDev/ui — shadcn primitives]
-        INFRA[@DreamDev/infra — alchemy.run]
+        DB["@DreamDev/db — schema + pure domain"]
+        AUTH["@DreamDev/auth — Better Auth"]
+        UIPKG["@DreamDev/ui — shadcn primitives"]
+        INFRA["@DreamDev/infra — alchemy.run"]
     end
     PRISMA --- DB
     HTTP --> AUTH
