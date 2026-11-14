@@ -1,155 +1,117 @@
-# DreamDev
+# DreamDev — Team Fund
 
-This project was created with [Better-T-Stack](https://github.com/AmanVarshney01/create-better-t-stack), a modern TypeScript stack that combines React, TanStack Start, Self, and more.
+**Every taka, accounted for.** DreamDev is a joint-savings fund for a single team: members commit to monthly Shares, money lives in the team's bank accounts, and anyone can take an interest-free loan. A running-balance ledger keeps dues, advances, and repayments honest — and an AI assistant operates the whole fund from the dashboard *and* Telegram, with every write gated behind human approval.
 
-## Features
+[![License: MIT](https://img.shields.io/badge/License-MIT-2ea44f.svg)](LICENSE)
 
-- **TypeScript** - For type safety and improved developer experience
-- **TanStack Start** - SSR framework with TanStack Router
-- **TailwindCSS** - Utility-first CSS for rapid UI development
-- **Shared UI package** - shadcn/ui primitives live in `packages/ui`
-- **Prisma** - TypeScript-first ORM
-- **PostgreSQL** - Database engine
-- **Authentication** - Better-Auth
-- **Turborepo** - Optimized monorepo build system
+| | |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Agent approval](docs/screenshots/agent-approval.png) |
+| *The dashboard: holdings, KPIs, dues* | *The assistant previews a write, then waits for approval* |
 
-## Getting Started
+More: [login](docs/screenshots/login.png) · [member detail](docs/screenshots/member-detail.png) · [transactions ledger](docs/screenshots/transactions.png) · [Telegram pairing](docs/screenshots/settings-telegram.png) · [assistant panel](docs/screenshots/agent-panel.png)
 
-First, install the dependencies:
+> A personal project — built end-to-end (spec → tickets → implementation → live acceptance) with AI agents under my direction. More on that in [How this was built](#how-this-was-built).
+
+## What it does
+
+**The fund ledger**
+
+- **Members & shares** — each member holds a share quantity; the global Share Price is effective-dated, so a price change never re-bills past months.
+- **Contributions & dues** — billing is share × price per month from joining to exit. Each member has one running number: **Due** (billed + adjustments − contributed). A negative Due is an **Advance**, carried forward. No payment allocation, no month-by-month juggling — see [ADR-0001](docs/adr/0001-running-balance-dues.md).
+- **Typed ledger** — contributions, loans, repayments, expenses, transfers, and adjustments each get their own table; there is no polymorphic transactions blob ([ADR-0002](docs/adr/0002-typed-ledger-tables.md)). All money is integer taka; all dates are date-only *Credit Dates* on the Asia/Dhaka clock and can never be in the future.
+- **Bank accounts** — balances are always derived (opening + in − out across all six entry types), never stored, so they can't drift.
+- **Loans** — interest-free, with repayments and per-member outstanding balance; repayments are individually deletable with full audit trail.
+- **One activity feed** — every entry in one filterable ledger, with fully optimistic UI: creates insert temp rows, edits/deletes patch caches, dialogs close instantly, toasts carry the outcome.
+
+**Access & roles** — email/password auth (Better Auth). The first user ever to sign up becomes Admin; everyone after is an Editor (fund data only). Admins manage users, share price, and adjustments; deactivated users can't open sessions.
+
+## The AI assistant
+
+The same services the dashboard calls are exposed to an LLM agent as tools — so Zod validation and role guards apply unchanged ([ADR-0004](docs/adr/0004-agent-tools-over-services.md)).
+
+- **Ask anything read-only**: member directory and positions, fund overview KPIs, bank balances, loans and outstanding, a filtered feed search.
+- **Record by conversation**: contributions, loans and repayments, expenses, transfers, adjustments — plus edits and soft deletes.
+- **Confirm gate on every write.** A write never happens because the model *said* it should. The flow is always: the agent calls a **preview tool** (shows the exact record and the member's Due before → after) → it calls the gated write tool → the run **interrupts** → a confirm card renders from the preview's structured result (never from model prose) → the human clicks **Approve** or **Reject**. A server-side middleware additionally hard-blocks any write whose exact arguments were not previewed earlier in the same thread.
+- **Audited**: every conversation, message, and tool call is persisted. Rate-limited per user.
+- **Telegram, two ways** — pair a chat with a **User** for the full agent over Telegram (approval pauses persist server-side with a 10-minute TTL and resume from an inline ✅/✖ keyboard), or pair a **Member** to receive templated DMs on 12 fund events (contribution recorded, loan deleted, shares changed, …), deduplicated per record/event/member.
+
+The agent streams over SSE using [TanStack AI](https://ai.tanstack.com) and the AG-UI wire protocol, against any OpenAI-compatible endpoint (model set via `AGENT_MODEL`). The UI renders live reasoning and tool activity with interrupt/resume support.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph webapp["apps/web — TanStack Start"]
+        UI[React UI<br/>TanStack Router + Query<br/>shadcn/ui] -->|Routes| HTTP[API routes]
+        PANEL[Agent panel<br/>SSE / AG-UI] --> CHATR[Agent chat route]
+        CHATR --> AGENT[Agent loop<br/>13 tools + confirm gate]
+        HTTP --> SVC[Services<br/>Zod-validated domain ops]
+        AGENT --> SVC
+    end
+    SVC --> PRISMA[(Prisma +<br/>Prisma Postgres)]
+    AGENT --> TG[Telegram webhook<br/>pairing · notify · resume]
+    subgraph pkgs["packages"]
+        DB[@DreamDev/db — schema + pure domain]
+        AUTH[@DreamDev/auth — Better Auth]
+        UIPKG[@DreamDev/ui — shadcn primitives]
+        INFRA[@DreamDev/infra — alchemy.run]
+    end
+    PRISMA --- DB
+    HTTP --> AUTH
+    UI --- UIPKG
+```
+
+- **`apps/web`** — fullstack TanStack Start app: routes, API routes, services, the agent, and the Telegram integration.
+- **`packages/db`** — multi-file Prisma schema plus pure, heavily-tested domain functions (`due`, `billing`, `balance`, `money`, `month`, `projection`) shared by the dashboard, the agent, and Telegram alike.
+- **`packages/auth`**, **`packages/ui`**, **`packages/config`**, **`packages/infra`** — auth wiring, shared shadcn/ui primitives, shared tsconfig, and infra-as-code (alchemy.run: Axiom observability credentials injected per stage).
+
+## How this was built
+
+This repo is also a study in directing AI agents through real product work. Every feature started as a written spec, decomposed into tickets on GitHub Issues, implemented by agent-driven rounds, and then accepted (or bounced) in live usage against a deployed preview — several live rounds caught real bugs that tests missed.
+
+- [`docs/superpowers/specs/`](docs/superpowers/specs/) — the design specs (v1 fund ledger, v2 AI agent + Telegram, date validation + agent repayments)
+- [`docs/superpowers/plans/`](docs/superpowers/plans/) — the corresponding implementation plans
+- [`docs/adr/`](docs/adr/) — four architecture decision records
+- [`GLOSSARY.md`](GLOSSARY.md) — the settled domain vocabulary
+- [`AGENTS.md`](AGENTS.md) — how agents work in this repo (issue tracker, triage labels, docs layout)
+
+## Running locally
+
+Prerequisites: [Bun](https://bun.sh), and a **[Prisma Postgres](https://www.prisma.io/postgres)** database URL. (The app talks to Postgres through the `@prisma/adapter-ppg` driver adapter, which expects a Prisma Postgres endpoint — a plain local `postgres` server won't answer the adapter's protocol. The free Prisma Postgres tier works fine for development.)
 
 ```bash
-bun install
+bun install          # also generates typed env code via varlock (postinstall)
+bun run db:generate  # generate the Prisma client
+bun run db:push      # apply the schema to your database
+bun run db:seed      # five demo members, two banks, ~8 months of history (refuses a non-empty DB)
+bun run dev          # http://localhost:3001
 ```
 
-## Database Setup
+Configure `apps/web/.env` (schemas are committed as `.env.schema` and documented inline):
 
-Generate the Prisma client before development, typechecking, or building, including in CI and deployment builds. Run this again after changing the Prisma schema:
+| Variable | Purpose |
+|---|---|
+| `DATABASE_URL` | Prisma Postgres connection string |
+| `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL` | auth secret and canonical origin (`http://localhost:3001` locally) |
+| `AGENT_API_KEY`, `AGENT_BASE_URL`, `AGENT_MODEL` | any OpenAI-compatible endpoint for the assistant |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME`, `TELEGRAM_WEBHOOK_SECRET` | the Telegram bot |
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob, for member photos ([ADR-0003](docs/adr/0003-vercel-blob-photo-storage.md)) |
+
+The first account you create becomes the Admin. `bun run dev` uses the Vite dev server; for agent SSE streams, verify against the built app (`bun run build && bun run serve`) — the dev proxy is unkind to long-lived streams.
+
+## Tests
 
 ```bash
-bun run db:generate
+bun test            # ~200 tests across apps/web and packages/db
 ```
 
-This project uses PostgreSQL with Prisma.
-
-1. Make sure you have a PostgreSQL database set up.
-2. Update your `apps/web/.env` file with your PostgreSQL connection details.
-
-3. Apply the schema to your database:
-
-```bash
-bun run db:push
-```
-
-Then, run the development server:
-
-```bash
-bun run dev
-```
-
-Open [http://localhost:3001](http://localhost:3001) in your browser to see the fullstack application.
-
-## UI Customization
-
-React web apps in this stack share shadcn/ui primitives through `packages/ui`.
-
-- Change design tokens and global styles in `packages/ui/src/styles/globals.css`
-- Update shared primitives in `packages/ui/src/components/*`
-- Adjust shadcn aliases or style config in `packages/ui/components.json` and `apps/web/components.json`
-
-### Add more shared components
-
-Run this from the project root to add more primitives to the shared UI package:
-
-```bash
-npx shadcn@latest add accordion dialog popover sheet table -c packages/ui
-```
-
-Import shared components like this:
-
-```tsx
-import { Button } from "@DreamDev/ui/components/button";
-```
-
-### Add app-specific blocks
-
-If you want to add app-specific blocks instead of shared primitives, run the shadcn CLI from `apps/web`.
-
-## Environment Configuration
-
-Each app owns its environment schema in `.env.schema`. Varlock generates `src/env.ts` during installation; run `bun run env:generate` after changing a schema. Commit schemas, and keep secrets in ignored env files or your deployment platform.
-
-Import the generated `ENV` accessor in application code. Shared database and auth packages receive configuration or initialized clients from the application. See [Varlock's monorepo guide](https://varlock.dev/guides/monorepos/).
-
-Bun's automatic env loading is disabled in `bunfig.toml`; the framework integration or server bootstrap loads Varlock. Node deployments must include Varlock and its dependencies alongside the app schema.
-
-Run standalone Node/Bun tools that use Varlock from the owning app directory so they load that app's schema and env files. `env:generate` only generates TypeScript files; it does not initialize environment values in a subsequent command.
+Domain logic is pure and unit-tested; API services are tested at the HTTP level; the agent loop (including the preview gate and approval interrupts), Telegram pairing/notify, and the seed all have dedicated suites. DB-backed tests derive a `*_test` database from `DATABASE_URL` and truncate between cases.
 
 ## Deployment
 
-### Alchemy
+The web app deploys to Vercel (`vercel.json`, `bun run deploy:prod`); observability credentials are provisioned as code in `packages/infra` via [alchemy.run](https://alchemy.run) and injected per stage. The Telegram webhook is registered with `scripts/telegram-set-webhook.ts`.
 
-- Target: Axiom observability
-- Configure provider accounts: `cd packages/infra && bunx alchemy profile edit`
-- Dev: bun run dev
-- Deploy: bun run deploy:infra
-- Destroy: bun run destroy
+## License
 
-`alchemy profile edit` stores the selected Axiom, Cloudflare, Neon, PlanetScale, and/or Prisma provider profiles under `~/.alchemy`; no provider-specific setup command is required by this scaffold.
-
-Deploys are staged and default to a personal `dev_<username>` stage. For production, run the deploy with an explicit stage from `packages/infra`:
-
-```bash
-cd packages/infra && bunx alchemy deploy --stage production
-```
-
-Alchemy creates a stage-specific Axiom dataset and a least-privilege ingest token. `dev` injects the credentials into the observed apps without writing the token to an env file.
-Link the Vercel project before the Alchemy deploy. Deploy from `packages/infra` with `alchemy deploy --stage preview` or `alchemy deploy --stage production` to sync Axiom credentials to the matching Vercel environment. Personal stages do not change shared Vercel credentials.
-
-### Vercel Services
-
-- Target: web + server
-- Config: `vercel.json`
-- Link the project first: bun run deploy:setup
-- Local Vercel dev: bun run dev:vercel
-- Sync preview env: bun run env:preview
-- Sync production env: bun run env:production
-- Dry-run check (no upload): bun run deploy:check
-- Preview deploy: bun run deploy
-- Production deploy: bun run deploy:prod
-  Vercel Services share project environment variables, but deploys do not upload local `.env` files automatically. Link the project with `vercel link`, then run the env sync command before your first deploy (otherwise the deployment starts with no env vars), or pass one-off envs with `vercel deploy -e KEY=value`.
-  Pass Vercel CLI flags to the env sync command directly, for example: `bun run env:production --scope your-team`.
-
-For more details, see the guide on [Deploying to Vercel](https://www.better-t-stack.dev/docs/guides/vercel).
-
-## Project Structure
-
-```
-DreamDev/
-├── apps/
-│   └── web/         # Fullstack application (React + TanStack Start)
-├── packages/
-│   ├── ui/          # Shared shadcn/ui components and styles
-│   ├── auth/        # Authentication configuration & logic
-│   └── db/          # Database schema & queries
-```
-
-## Available Scripts
-
-- `bun run dev`: Start all applications in development mode
-- `bun run build`: Build all applications
-- `bun run check-types`: Check TypeScript types across all apps
-- `bun run db:push`: Push schema changes to database
-- `bun run db:generate`: Generate database client/types
-- `bun run db:migrate`: Run database migrations
-- `bun run db:studio`: Open database studio UI
-- `bun run deploy:setup`: Link this repo to a Vercel project (first-time setup)
-- `bun run dev:vercel`: Run the Vercel Services dev environment locally
-- `bun run env:preview`: Sync local env files to the Vercel preview environment
-- `bun run env:production`: Sync local env files to the Vercel production environment
-- `bun run deploy`: Create a Vercel preview deployment
-- `bun run deploy:prod`: Deploy to Vercel production
-- `bun run deploy:check`: Dry-run a deploy to preview framework detection and included files without uploading
-
-## Better Auth Schema Generation
-
-After changing auth plugins or schema options, run `bun run auth:generate` from the project root. The script runs the Better Auth CLI through `varlock run` from the owning app directory, loading the auth instance from `src/services.ts`. Review the schema changes, then use your ORM's migration workflow to apply them.
+[MIT](LICENSE) — © 2026 shakibdshy. Demo data in screenshots is seeded fiction.
