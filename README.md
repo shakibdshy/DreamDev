@@ -107,7 +107,7 @@ bun test            # ~200 tests across apps/web and packages/db
 cd apps/web && bun run test:component   # React Testing Library component tests (jsdom)
 ```
 
-Domain logic is pure and unit-tested; API services are tested at the HTTP level; the agent loop (including the preview gate and approval interrupts), Telegram pairing/notify, and the seed all have dedicated suites. DB-backed tests derive a `*_test` database from `DATABASE_URL` and truncate between cases. Component tests use React Testing Library on `bun:test`. Default `bun test` discovery excludes `*.test.tsx` via `pathIgnorePatterns` in both `bunfig.toml` files; the `test:component` script overrides that exclusion and loads the jsdom preload in `apps/web/src/test/setup.ts`. No global preload or environment change affects other suites.
+Domain logic is pure and unit-tested; API services are tested at the HTTP level; the agent loop (including the preview gate and approval interrupts), Telegram pairing/notify, and the seed all have dedicated suites. DB-backed tests derive a `*_test` database from `DATABASE_URL` and truncate between cases. Component tests use React Testing Library on `bun:test`. Default `bun test` discovery excludes `*.test.tsx` via `pathIgnorePatterns` in both `bunfig.toml` files and an explicit flag in the web `test` script. `bun run test:component` overrides that exclusion with its own path pattern, discovers all `*.test.tsx` files, and loads the jsdom preload in `apps/web/src/test/setup.ts`. No global preload or environment change affects other suites.
 
 ## Deployment
 

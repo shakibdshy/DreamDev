@@ -65,6 +65,14 @@ describe("assertSameOrigin (CSRF guard)", () => {
     expect(() => assertSameOrigin(request)).not.toThrow();
   });
 
+  test("an unusable forwarded host fails closed instead of skipping the check", () => {
+    const request = new Request("http://internal:3000/api/members", {
+      method: "POST",
+      headers: { origin: APP, "x-forwarded-host": "not a host" },
+    });
+    expect(() => assertSameOrigin(request)).toThrow(HttpError);
+  });
+
   test("Sec-Fetch-Site cross-site is refused even without Origin", () => {
     try {
       assertSameOrigin(post({ "sec-fetch-site": "cross-site" }));

@@ -9,6 +9,9 @@ const { window } = dom;
 
 for (const key of Object.getOwnPropertyNames(window)) {
   if (key === "window" || key === "document" || key === "navigator") continue;
+  // Bun's own globals (Event, Blob, TextEncoder, …) are deliberately kept:
+  // the component tests below pass with them, and replacing the constructors
+  // can break React 19's event dispatch with instanceof mismatches.
   if (key in globalThis) continue;
   const descriptor = Object.getOwnPropertyDescriptor(window, key);
   if (descriptor) Object.defineProperty(globalThis, key, descriptor);

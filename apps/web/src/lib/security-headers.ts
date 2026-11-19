@@ -9,12 +9,14 @@
  * the clickjacking defence), no plugins, no base hijack, no cross-origin
  * form targets, images restricted to self and the member-photo blob host.
  */
+const MEMBER_PHOTO_BLOB_HOST = "https://*.blob.vercel-storage.com";
+
 export const securityHeaders: Record<string, string> = {
   "Content-Security-Policy": [
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: https://*.blob.vercel-storage.com",
+    `img-src 'self' data: ${MEMBER_PHOTO_BLOB_HOST}`,
     "font-src 'self'",
     "connect-src 'self'",
     "frame-ancestors 'none'",

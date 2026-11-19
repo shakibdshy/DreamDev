@@ -14,7 +14,7 @@ export function idlePhase(idleMs: number): IdlePhase {
   return "active";
 }
 
-/** Whole seconds left before logout, floored at zero (drives the warning text). */
+/** Whole seconds left before logout (rounded up, clamped at zero; drives the warning text). */
 export function secondsLeft(idleMs: number): number {
   return Math.max(0, Math.ceil((IDLE_LIMIT_MS - idleMs) / 1000));
 }

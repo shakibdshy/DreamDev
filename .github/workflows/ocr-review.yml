@@ -35,12 +35,16 @@ concurrency:
       && format('ocr-{0}', github.event.pull_request.number || github.event.issue.number)
       || format('noop-{0}', github.run_id)
     }}
+  # Intentional: a collaborator's re-review command cancels an in-flight
+  # automatic review for the same PR, so only the newest result is published.
   cancel-in-progress: true
 
 on:
-  # pull_request_target keeps the LLM key available for fork PRs. The action
-  # checks out only trusted base code and fetches PR head blobs; it does not
-  # execute code from the PR.
+  # pull_request_target keeps the LLM key available for fork PRs. Verified at
+  # pin 445ad9d: "Checkout base" uses the trusted base (fetch-depth: 0), PR head
+  # blobs are fetched as git objects without materializing PR files, the CLI is
+  # installed from npm, and the token is passed via `with:` into env
+  # OCR_LLM_TOKEN with `llm.auth_token_cmd` — no PR-controlled code is executed.
   pull_request_target:
     types: [opened, synchronize, reopened]
   issue_comment:
@@ -87,6 +91,9 @@ jobs:
             core.setOutput('base_ref', pullRequest.base.ref);
             core.setOutput('head_sha', pullRequest.head.sha);
 
+      # For pull_request_target the action reads base/head from the event
+      # payload itself (action.yml: EVENT_BASE_REF / EVENT_HEAD_SHA), so the
+      # empty step outputs below are harmless for automatic PR reviews.
       - name: Run OpenCodeReview
         uses: alibaba/open-code-review@445ad9dea3057346986197385858a1a281253cc9 # v1.13.13
         with:

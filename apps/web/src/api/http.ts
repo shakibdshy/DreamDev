@@ -46,7 +46,13 @@ const originOf = (value: string): string | null => {
   }
 };
 
-/** The origin clients see: forwarded proxy headers win over the internal request URL. */
+/**
+ * The origin clients see: forwarded proxy headers win over the internal request URL.
+ * Deployment assumption: the front proxy overwrites `x-forwarded-host`/`-proto`
+ * on every request so a client cannot choose the value the Origin is compared to.
+ * Defaulting to https when the proxy omits `-proto` keeps TLS-terminating
+ * proxies working.
+ */
 const publicOriginOf = (request: Request): string | null => {
   const host = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
   if (host) {
@@ -70,7 +76,9 @@ export function assertSameOrigin(request: Request): void {
     // Compare complete origins (scheme + host), not hostnames: an HTTP Origin
     // must not pass for an HTTPS app just because the host matches.
     const publicOrigin = publicOriginOf(request);
-    if (publicOrigin && originOf(origin) !== publicOrigin) {
+    // Fail closed: if we cannot establish a public origin, an untrusted Origin
+    // cannot be accepted just because the comparison was skipped.
+    if (!publicOrigin || originOf(origin) !== publicOrigin) {
       throw new HttpError(403, "Cross-site request refused");
     }
   }

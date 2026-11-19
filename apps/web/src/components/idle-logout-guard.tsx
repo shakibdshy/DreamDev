@@ -24,11 +24,13 @@ export function IdleLogoutGuard() {
   const [secondsRemaining, setSecondsRemaining] = useState<number | null>(null);
   const [signOutError, setSignOutError] = useState(false);
   const signingOut = useRef(false);
+  const signOutFailed = useRef(false);
   const channel = useRef<BroadcastChannel | null>(null);
 
   const signOut = useCallback(() => {
     if (signingOut.current) return;
     signingOut.current = true;
+    signOutFailed.current = false;
     setSignOutError(false);
     authClient.signOut({
       fetchOptions: {
@@ -39,6 +41,9 @@ export function IdleLogoutGuard() {
         },
         onError: (context) => {
           signingOut.current = false;
+          // Once failed, only the explicit Retry button may call signOut again —
+          // the interval must not hammer the auth endpoint every CHECK_MS.
+          signOutFailed.current = true;
           setSignOutError(true);
           console.error("Idle sign-out failed", context);
         },
@@ -47,6 +52,8 @@ export function IdleLogoutGuard() {
   }, [router]);
 
   useEffect(() => {
+    // Without BroadcastChannel this degrades to per-tab timers: each tab still
+    // signs itself out, but activity no longer resets the others.
     channel.current = "BroadcastChannel" in window ? new BroadcastChannel(IDLE_CHANNEL) : null;
     const activeChannel = channel.current;
 
@@ -95,7 +102,7 @@ export function IdleLogoutGuard() {
     });
 
     const timer = window.setInterval(() => {
-      if (signingOut.current) return;
+      if (signingOut.current || signOutFailed.current) return;
       const idleMs = Date.now() - lastActivity.current;
       const phase = idlePhase(idleMs);
       if (phase === "active") {

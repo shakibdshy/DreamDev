@@ -5,6 +5,7 @@ import { useState } from "react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import SignInForm from "@/components/sign-in-form";
 import SignUpForm from "@/components/sign-up-form";
+import { IDLE_LIMIT_MS } from "@/lib/idle-logout";
 
 export const Route = createFileRoute("/login")({
   component: RouteComponent,
@@ -83,7 +84,7 @@ function RouteComponent() {
           <div className="w-full max-w-sm">
             {reason === "idle" ? (
               <p className="mb-4 rounded-lg border border-border bg-muted px-3 py-2 text-center text-xs text-muted-foreground">
-                You were signed out after 15 minutes of inactivity — sign in to continue.
+                You were signed out after {IDLE_LIMIT_MS / 60_000} minutes of inactivity — sign in to continue.
               </p>
             ) : null}
             {showSignIn ? (
