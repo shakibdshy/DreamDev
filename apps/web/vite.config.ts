@@ -14,16 +14,14 @@ export default defineConfig(({ command }) => ({
   resolve: {
     tsconfigPaths: true,
   },
-  // Security headers on every response — the policy itself lives in
-  // src/lib/security-headers and is pinned by tests.
-  routeRules: {
-    "/**": { headers: securityHeaders },
-  },
   plugins: [
     varlockVitePlugin({ ssrInjectMode: "resolved-env" }),
     tailwindcss(),
     tanstackStart(),
-    nitro(),
+    // Security headers on every response — the policy itself lives in
+    // src/lib/security-headers and is pinned by tests. Nitro installs these
+    // route rules; a top-level Vite `routeRules` key is ignored.
+    nitro({ routeRules: { "/**": { headers: securityHeaders } } }),
     viteReact(),
   ],
   // The build artifact is standalone, but dev's module runner can't evaluate React's inlined CJS entry.

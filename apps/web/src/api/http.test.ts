@@ -45,6 +45,26 @@ describe("assertSameOrigin (CSRF guard)", () => {
     expect(() => assertSameOrigin(request)).not.toThrow();
   });
 
+  test("an HTTP Origin is refused for the HTTPS public origin behind a proxy", () => {
+    const request = new Request("http://internal:3000/api/members", {
+      method: "POST",
+      headers: { origin: APP.replace("https://", "http://"), "x-forwarded-host": "dream-dev-ashen.vercel.app" },
+    });
+    expect(() => assertSameOrigin(request)).toThrow(HttpError);
+  });
+
+  test("matching scheme and host over an HTTPS proxy passes", () => {
+    const request = new Request("http://internal:3000/api/members", {
+      method: "POST",
+      headers: {
+        origin: APP,
+        "x-forwarded-host": "dream-dev-ashen.vercel.app",
+        "x-forwarded-proto": "https",
+      },
+    });
+    expect(() => assertSameOrigin(request)).not.toThrow();
+  });
+
   test("Sec-Fetch-Site cross-site is refused even without Origin", () => {
     try {
       assertSameOrigin(post({ "sec-fetch-site": "cross-site" }));

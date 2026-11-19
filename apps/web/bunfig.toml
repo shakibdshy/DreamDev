@@ -1,1 +1,5 @@
 env = false
+
+[test]
+# Component tests need the jsdom preload from `bun run test:component`.
+pathIgnorePatterns = ["**/*.test.tsx"]

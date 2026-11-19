@@ -107,7 +107,7 @@ bun test            # ~200 tests across apps/web and packages/db
 cd apps/web && bun run test:component   # React Testing Library component tests (jsdom)
 ```
 
-Domain logic is pure and unit-tested; API services are tested at the HTTP level; the agent loop (including the preview gate and approval interrupts), Telegram pairing/notify, and the seed all have dedicated suites. DB-backed tests derive a `*_test` database from `DATABASE_URL` and truncate between cases. Component tests use React Testing Library on `bun:test`, scoped to `*.test.tsx` via the `test:component` script and the jsdom preload in `apps/web/src/test/setup.ts`; the other suites are unaffected.
+Domain logic is pure and unit-tested; API services are tested at the HTTP level; the agent loop (including the preview gate and approval interrupts), Telegram pairing/notify, and the seed all have dedicated suites. DB-backed tests derive a `*_test` database from `DATABASE_URL` and truncate between cases. Component tests use React Testing Library on `bun:test`. Default `bun test` discovery excludes `*.test.tsx` via `pathIgnorePatterns` in both `bunfig.toml` files; the `test:component` script overrides that exclusion and loads the jsdom preload in `apps/web/src/test/setup.ts`. No global preload or environment change affects other suites.
 
 ## Deployment
 
@@ -117,7 +117,7 @@ The web app deploys to Vercel (`vercel.json`, `bun run deploy:prod`); observabil
 
 The fund ledger holds real names, mobile numbers and money movements, so the app ships three named defences plus a data-hygiene posture:
 
-- **XSS — Content-Security-Policy** on every response: `default-src 'self'`, no foreign script origins at all, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`; images are restricted to the app and the member-photo blob host. `script-src` keeps `'unsafe-inline'` because SSR hydration scripts are request-dynamic (the framework has no per-request nonce API yet) — the header still denies every external script source, which is the actual XSS delivery channel.
+- **XSS — Content-Security-Policy** on every response: `default-src 'self'`, no foreign script origins at all, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`; images are restricted to the app and the member-photo blob host. `script-src` keeps `'unsafe-inline'` because SSR hydration scripts are request-dynamic (the framework has no per-request nonce API yet). Note that `'unsafe-inline'` permits inline scripts and event handlers, so blocking external script origins does not prevent those injection forms — this CSP is a defence-in-depth layer, not a complete XSS fix.
 - **CSRF — layered**: session cookies are `SameSite=Lax` + `httpOnly` (better-auth defaults), auth endpoints validate `trustedOrigins`, and every mutating `/api` request is refused 403 on a foreign `Origin` or `Sec-Fetch-Site: cross-site` (the Telegram webhook is exempt — it authenticates by secret header, not cookie).
 - **Clickjacking — `frame-ancestors 'none'` + `X-Frame-Options: DENY`**: no other site may embed the app. `Referrer-Policy: strict-origin-when-cross-origin` and `Permissions-Policy` (camera/microphone/geolocation off) round it out.
 

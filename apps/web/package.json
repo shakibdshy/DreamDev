@@ -7,7 +7,7 @@
     "serve": "vite preview",
     "check-types": "vite build && tsc --noEmit",
     "test": "bun test --timeout 30000",
-    "test:component": "bun test --preload ./src/test/setup.ts src/components/*.test.tsx",
+    "test:component": "bun test --path-ignore-patterns '__none__' --preload ./src/test/setup.ts ./src/components/confirm-dialog.test.tsx",
     "dev:bare": "vite dev",
     "env:generate": "varlock codegen",
     "auth:generate": "varlock run -- bun x auth@latest generate --config src/services.ts --output ../../packages/db/prisma/schema/auth.prisma --yes"

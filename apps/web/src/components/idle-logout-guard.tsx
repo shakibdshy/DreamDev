@@ -1,6 +1,6 @@
 import { useRouter } from "@tanstack/react-router";
 import { ClockAlertIcon } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { authClient } from "@/lib/auth-client";
 import { IDLE_CHANNEL, idlePhase, secondsLeft } from "@/lib/idle-logout";
@@ -22,29 +22,67 @@ export function IdleLogoutGuard() {
   const router = useRouter();
   const lastActivity = useRef(Date.now());
   const [secondsRemaining, setSecondsRemaining] = useState<number | null>(null);
+  const [signOutError, setSignOutError] = useState(false);
   const signingOut = useRef(false);
+  const channel = useRef<BroadcastChannel | null>(null);
+
+  const signOut = useCallback(() => {
+    if (signingOut.current) return;
+    signingOut.current = true;
+    setSignOutError(false);
+    authClient.signOut({
+      fetchOptions: {
+        onSuccess: () => {
+          // Other tabs should leave only after this tab's session is really gone.
+          channel.current?.postMessage({ type: "signed-out" } satisfies IdleMessage);
+          void router.navigate({ to: "/login", search: { reason: "idle" } });
+        },
+        onError: (context) => {
+          signingOut.current = false;
+          setSignOutError(true);
+          console.error("Idle sign-out failed", context);
+        },
+      },
+    });
+  }, [router]);
 
   useEffect(() => {
-    const channel = "BroadcastChannel" in window ? new BroadcastChannel(IDLE_CHANNEL) : null;
-
-    const noteActivity = () => {
-      lastActivity.current = Date.now();
-      channel?.postMessage({ type: "activity", t: lastActivity.current } satisfies IdleMessage);
-    };
+    channel.current = "BroadcastChannel" in window ? new BroadcastChannel(IDLE_CHANNEL) : null;
+    const activeChannel = channel.current;
 
     let lastBroadcast = 0;
+    let trailingBroadcast: number | undefined;
+    const broadcastActivity = () => {
+      lastBroadcast = Date.now();
+      if (trailingBroadcast !== undefined) {
+        window.clearTimeout(trailingBroadcast);
+        trailingBroadcast = undefined;
+      }
+      activeChannel?.postMessage({ type: "activity", t: lastActivity.current } satisfies IdleMessage);
+    };
+
     const onActivity = () => {
       const now = Date.now();
-      if (now - lastBroadcast < ACTIVITY_THROTTLE_MS) return;
-      lastBroadcast = now;
-      noteActivity();
+      // Every input counts, even inside the throttle window. Only delivery is throttled.
+      lastActivity.current = now;
+      const elapsed = lastBroadcast === 0 ? ACTIVITY_THROTTLE_MS : now - lastBroadcast;
+      if (elapsed >= ACTIVITY_THROTTLE_MS) {
+        broadcastActivity();
+        return;
+      }
+      if (trailingBroadcast === undefined) {
+        trailingBroadcast = window.setTimeout(() => {
+          trailingBroadcast = undefined;
+          broadcastActivity();
+        }, ACTIVITY_THROTTLE_MS - elapsed);
+      }
     };
     const listeners = ACTIVITY_EVENTS.map((event) => {
       window.addEventListener(event, onActivity, { passive: true });
       return [event, onActivity] as const;
     });
 
-    channel?.addEventListener("message", (event: MessageEvent<IdleMessage>) => {
+    activeChannel?.addEventListener("message", (event: MessageEvent<IdleMessage>) => {
       const message = event.data;
       if (message.type === "activity" && message.t > lastActivity.current) {
         lastActivity.current = message.t;
@@ -66,35 +104,37 @@ export function IdleLogoutGuard() {
       }
       setSecondsRemaining(secondsLeft(idleMs));
       if (phase === "expired") {
-        signingOut.current = true;
-        channel?.postMessage({ type: "signed-out" } satisfies IdleMessage);
-        authClient.signOut({
-          fetchOptions: {
-            onSuccess: () => {
-              void router.navigate({ to: "/login", search: { reason: "idle" } });
-            },
-            onError: () => {
-              // The cookie is what matters — go to login regardless.
-              void router.navigate({ to: "/login", search: { reason: "idle" } });
-            },
-          },
-        });
+        setSecondsRemaining(null);
+        signOut();
       }
     }, CHECK_MS);
 
     return () => {
       window.clearInterval(timer);
-      channel?.close();
+      if (trailingBroadcast !== undefined) window.clearTimeout(trailingBroadcast);
+      activeChannel?.close();
+      if (channel.current === activeChannel) channel.current = null;
       for (const [event, handler] of listeners) window.removeEventListener(event, handler);
     };
-  }, [router]);
+  }, [router, signOut]);
 
+  const alertClass =
+    "fixed inset-x-0 bottom-4 z-50 mx-auto flex w-fit items-center gap-2 rounded-full border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive shadow-lg backdrop-blur";
+
+  if (signOutError) {
+    return (
+      <div role="alert" className={alertClass}>
+        <ClockAlertIcon className="size-4 shrink-0" aria-hidden />
+        Couldn&apos;t sign out after inactivity.
+        <button type="button" className="font-semibold underline" onClick={signOut}>
+          Retry
+        </button>
+      </div>
+    );
+  }
   if (secondsRemaining === null) return null;
   return (
-    <div
-      role="alert"
-      className="fixed inset-x-0 bottom-4 z-50 mx-auto flex w-fit items-center gap-2 rounded-full border border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive shadow-lg backdrop-blur"
-    >
+    <div role="alert" className={alertClass}>
       <ClockAlertIcon className="size-4 shrink-0" aria-hidden />
       Signing out in {secondsRemaining}s — click, scroll or type to stay signed in.
     </div>

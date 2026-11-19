@@ -20,7 +20,7 @@ Primary-source research on the PR-Agent repository (`The-PR-Agent/pr-agent`), ga
   - `/improve` — committable code suggestions
   - `/ask "..."` — free-text Q&A about the PR or specific code lines
   - `/add_docs` — generate docs for undocumented components
-  - `/generate_labels` — custom labels based on the diff; label set configurable via `custom_labels` in `pr_agent/settings/configuration.toml` (https://github.com/The-PR-Agent/pr-agent/blob/main/pr_agent/settings/configuration.toml)
+  - `/generate_labels` — custom labels based on the diff; custom labels must be enabled in host configuration with `config.enable_custom_labels = true` (host-only, not settable from a repo `.pr_agent.toml`), then defined in `[custom_labels]` — see the [custom-label example](https://docs.pr-agent.ai/commands/generate_labels/#defining-custom-labels) (https://docs.pr-agent.ai/commands/generate_labels/)
   - `/similar_issue` — find similar issues (issue-scoped command)
   - `/help` — list available commands
   - `/update_changelog` — update CHANGELOG.md from PR changes
@@ -46,7 +46,7 @@ Open source (this repo):
 Commercial/hosted (separate from this repo):
 - Qodo Merge (formerly PR-Agent Pro), the hosted/enterprise version, has been rebranded and evolved into "Qodo" ("Qodo 2.0"), a full AI code-review platform (https://github.com/The-PR-Agent/pr-agent#big-news-for-pr-agent).
 - Qodo offers a free tier for open-source projects and is the OSS repo's Gold sponsor (https://www.qodo.ai/solutions/open-source/, https://github.com/The-PR-Agent/pr-agent#sponsors).
-- No GitHub Marketplace listing exists anymore: `github.com/marketplace/pr-agent` and related slugs return 404 (checked 2026-11-19).
+- A GitHub Marketplace listing **does exist** as [The PR Agent](https://github.com/marketplace/actions/the-pr-agent) (checked 2026-11-19). The earlier 404s were for other slugs (e.g. `github.com/marketplace/pr-agent`) and do not prove that no listing exists.
 
 ## 5. License and tech stack
 
@@ -86,8 +86,10 @@ name: PR Agent
 on:
   pull_request:
     types: [opened, synchronize]
+  issue_comment:   # lets PR comment commands (/review, /ask, ...) start the workflow
 jobs:
   pr_agent_job:
+    if: ${{ github.event.sender.type != 'Bot' && (github.event_name == 'pull_request' || github.event.issue.pull_request) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -101,7 +103,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-- Triggering: on `pull_request` events the action runs automatically; PR-Agent skips `synchronize` by default — auto-run commands are controlled by `github_action_config.pr_actions`, and push-triggered commands by `github_action_config.handle_push_trigger` (https://github.com/The-PR-Agent/pr-agent#github-action-recommended).
+- Triggering: on `pull_request` events the action runs automatically; PR-Agent skips `synchronize` by default — auto-run commands are controlled by `github_action_config.pr_actions`, and push-triggered commands by `github_action_config.handle_push_trigger` (https://github.com/The-PR-Agent/pr-agent#github-action-recommended). Fork caveat: with the plain `pull_request` event, forked PRs run without repository secrets (`OPENAI_KEY` is empty) and with a read-only `GITHUB_TOKEN`, so the review cannot complete or publish; use `pull_request_target` for fork support (https://docs.pr-agent.ai/installation/github/#using-with-pull_request_target-forkcontribution-support, https://docs.github.com/en/actions/writing-workflows/events-that-trigger-workflows#pull_request).
 - Otherwise, any command (`/review`, `/improve`, `/ask "..."`) is invoked by posting it as a comment on the PR; the agent replies in the same PR (https://docs.pr-agent.ai/commands/#usage-examples).
 - CLI equivalent: `pr-agent --pr_url <PR_URL> review` (https://docs.pr-agent.ai/commands/#usage-examples).
 - Setup guide: https://docs.pr-agent.ai/installation/github/#run-as-a-github-action

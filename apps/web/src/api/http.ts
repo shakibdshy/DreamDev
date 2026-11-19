@@ -37,12 +37,23 @@ export function parseOr422<T>(
 
 const UNSAFE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
 
-const hostOf = (value: string): string | null => {
+const originOf = (value: string): string | null => {
   try {
-    return new URL(value).host;
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}`;
   } catch {
     return null;
   }
+};
+
+/** The origin clients see: forwarded proxy headers win over the internal request URL. */
+const publicOriginOf = (request: Request): string | null => {
+  const host = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  if (host) {
+    const protocol = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ?? "https";
+    return originOf(`${protocol}://${host}`);
+  }
+  return originOf(request.url);
 };
 
 /**
@@ -56,11 +67,10 @@ export function assertSameOrigin(request: Request): void {
 
   const origin = request.headers.get("origin");
   if (origin) {
-    // Behind proxies the request URL host differs from the public one — trust
-    // the forwarded host (first hop) as the public identity.
-    const forwarded = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
-    const publicHost = forwarded ? hostOf(`https://${forwarded}`) : hostOf(request.url);
-    if (publicHost && hostOf(origin) !== publicHost) {
+    // Compare complete origins (scheme + host), not hostnames: an HTTP Origin
+    // must not pass for an HTTPS app just because the host matches.
+    const publicOrigin = publicOriginOf(request);
+    if (publicOrigin && originOf(origin) !== publicOrigin) {
       throw new HttpError(403, "Cross-site request refused");
     }
   }
