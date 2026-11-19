@@ -8,9 +8,13 @@ import SignUpForm from "@/components/sign-up-form";
 
 export const Route = createFileRoute("/login")({
   component: RouteComponent,
+  validateSearch: (search: Record<string, unknown>): { reason?: string } => ({
+    reason: typeof search.reason === "string" ? search.reason : undefined,
+  }),
 });
 
 function RouteComponent() {
+  const { reason } = Route.useSearch();
   const [showSignIn, setShowSignIn] = useState(true);
 
   return (
@@ -77,6 +81,11 @@ function RouteComponent() {
 
         <main className="flex flex-1 items-center justify-center px-5 pb-12 sm:px-10">
           <div className="w-full max-w-sm">
+            {reason === "idle" ? (
+              <p className="mb-4 rounded-lg border border-border bg-muted px-3 py-2 text-center text-xs text-muted-foreground">
+                You were signed out after 15 minutes of inactivity — sign in to continue.
+              </p>
+            ) : null}
             {showSignIn ? (
               <SignInForm onSwitchToSignUp={() => setShowSignIn(false)} />
             ) : (

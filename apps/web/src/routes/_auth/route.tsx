@@ -1,6 +1,7 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
 
 import { AppShell } from "@/components/app-shell";
+import { IdleLogoutGuard } from "@/components/idle-logout-guard";
 import { getUser } from "@/functions/get-user";
 
 export const Route = createFileRoute("/_auth")({
@@ -28,6 +29,7 @@ function AuthLayout() {
   if (!session) return null;
   return (
     <AppShell user={session.user}>
+      <IdleLogoutGuard />
       <Outlet />
     </AppShell>
   );

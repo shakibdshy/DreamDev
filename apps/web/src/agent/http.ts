@@ -8,7 +8,7 @@ import { optionalEnv } from "@/env-optional";
 
 import { agentStream, createRateLimiter, ensureConversation, messageText, RateLimitError } from "./agent";
 import type { AgentContext } from "./context";
-import { errorResponse, HttpError, requireUser } from "../api/http";
+import { assertSameOrigin, errorResponse, HttpError, requireUser } from "../api/http";
 import { appContext, withApi, type ApiResolver } from "../api/route-helpers";
 
 /** HTTP surface for the fund agent: POST = one agent turn (SSE), GET = history. */
@@ -85,6 +85,7 @@ export function agentApi(resolve: ApiResolver, options: AgentApiOptions = {}) {
     /** One agent turn: streams SSE chunks back to the chat panel. */
     postChat: async ({ request }: { request: Request }) => {
       try {
+        assertSameOrigin(request); // CSRF: the chat POST carries the session cookie
         const { db, session } = await resolve(request);
         const user = requireUser(session);
         const adapter = options.adapter ?? options.getAdapter?.();

@@ -35,6 +35,41 @@ export function parseOr422<T>(
   return result.data;
 }
 
+const UNSAFE_METHODS = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
+const hostOf = (value: string): string | null => {
+  try {
+    return new URL(value).host;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * CSRF guard for the cookie-session API: on an unsafe method, a foreign Origin
+ * or a cross-site Sec-Fetch-Site is refused (403). SameSite=Lax session
+ * cookies are the first layer; this is the explicit one. Absent headers (curl,
+ * server-to-server webhooks, tests) pass — authentication still gates those.
+ */
+export function assertSameOrigin(request: Request): void {
+  if (!UNSAFE_METHODS.has(request.method)) return;
+
+  const origin = request.headers.get("origin");
+  if (origin) {
+    // Behind proxies the request URL host differs from the public one — trust
+    // the forwarded host (first hop) as the public identity.
+    const forwarded = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+    const publicHost = forwarded ? hostOf(`https://${forwarded}`) : hostOf(request.url);
+    if (publicHost && hostOf(origin) !== publicHost) {
+      throw new HttpError(403, "Cross-site request refused");
+    }
+  }
+
+  if (request.headers.get("sec-fetch-site") === "cross-site") {
+    throw new HttpError(403, "Cross-site request refused");
+  }
+}
+
 /** Maps any thrown value to a JSON-able error response. */
 export function errorResponse(error: unknown): Response {
   if (error instanceof HttpError) {

@@ -5,12 +5,19 @@ import viteReact from "@vitejs/plugin-react";
 import { nitro } from "nitro/vite";
 import { defineConfig } from "vite";
 
+import { securityHeaders } from "./src/lib/security-headers";
+
 export default defineConfig(({ command }) => ({
   server: {
     port: 3001,
   },
   resolve: {
     tsconfigPaths: true,
+  },
+  // Security headers on every response — the policy itself lives in
+  // src/lib/security-headers and is pinned by tests.
+  routeRules: {
+    "/**": { headers: securityHeaders },
   },
   plugins: [
     varlockVitePlugin({ ssrInjectMode: "resolved-env" }),

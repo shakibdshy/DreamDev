@@ -7,6 +7,7 @@
     "serve": "vite preview",
     "check-types": "vite build && tsc --noEmit",
     "test": "bun test --timeout 30000",
+    "test:component": "bun test --preload ./src/test/setup.ts src/components/*.test.tsx",
     "dev:bare": "vite dev",
     "env:generate": "varlock codegen",
     "auth:generate": "varlock run -- bun x auth@latest generate --config src/services.ts --output ../../packages/db/prisma/schema/auth.prisma --yes"
@@ -47,8 +48,10 @@
     "@DreamDev/config": "workspace:*",
     "@tanstack/react-router-devtools": "^1.167.2",
     "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^8.0.0",
     "@testing-library/react": "^16.3.3",
     "@types/bun": "^1.4.4",
+    "@types/jsdom": "^30.0.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",

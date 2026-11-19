@@ -1,7 +1,7 @@
 import type { Session } from "@DreamDev/auth";
 import type { Database } from "@DreamDev/db";
 
-import { errorResponse } from "./http";
+import { assertSameOrigin, errorResponse } from "./http";
 
 export interface ApiContext {
   db: Database;
@@ -34,6 +34,7 @@ export function withApi(
 ) {
   return async ({ request, params }: { request: Request; params?: Record<string, string> }) => {
     try {
+      assertSameOrigin(request); // CSRF: foreign-origin unsafe methods never reach the DB
       const result = await handler(await resolve(request), request, params ?? {});
       return result instanceof Response ? result : ok(result);
     } catch (error) {

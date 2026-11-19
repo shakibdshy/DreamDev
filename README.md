@@ -104,13 +104,30 @@ The first account you create becomes the Admin. `bun run dev` uses the Vite dev 
 
 ```bash
 bun test            # ~200 tests across apps/web and packages/db
+cd apps/web && bun run test:component   # React Testing Library component tests (jsdom)
 ```
 
-Domain logic is pure and unit-tested; API services are tested at the HTTP level; the agent loop (including the preview gate and approval interrupts), Telegram pairing/notify, and the seed all have dedicated suites. DB-backed tests derive a `*_test` database from `DATABASE_URL` and truncate between cases.
+Domain logic is pure and unit-tested; API services are tested at the HTTP level; the agent loop (including the preview gate and approval interrupts), Telegram pairing/notify, and the seed all have dedicated suites. DB-backed tests derive a `*_test` database from `DATABASE_URL` and truncate between cases. Component tests use React Testing Library on `bun:test`, scoped to `*.test.tsx` via the `test:component` script and the jsdom preload in `apps/web/src/test/setup.ts`; the other suites are unaffected.
 
 ## Deployment
 
 The web app deploys to Vercel (`vercel.json`, `bun run deploy:prod`); observability credentials are provisioned as code in `packages/infra` via [alchemy.run](https://alchemy.run) and injected per stage. The Telegram webhook is registered with `scripts/telegram-set-webhook.ts`.
+
+## Security
+
+The fund ledger holds real names, mobile numbers and money movements, so the app ships three named defences plus a data-hygiene posture:
+
+- **XSS — Content-Security-Policy** on every response: `default-src 'self'`, no foreign script origins at all, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`; images are restricted to the app and the member-photo blob host. `script-src` keeps `'unsafe-inline'` because SSR hydration scripts are request-dynamic (the framework has no per-request nonce API yet) — the header still denies every external script source, which is the actual XSS delivery channel.
+- **CSRF — layered**: session cookies are `SameSite=Lax` + `httpOnly` (better-auth defaults), auth endpoints validate `trustedOrigins`, and every mutating `/api` request is refused 403 on a foreign `Origin` or `Sec-Fetch-Site: cross-site` (the Telegram webhook is exempt — it authenticates by secret header, not cookie).
+- **Clickjacking — `frame-ancestors 'none'` + `X-Frame-Options: DENY`**: no other site may embed the app. `Referrer-Policy: strict-origin-when-cross-origin` and `Permissions-Policy` (camera/microphone/geolocation off) round it out.
+
+**Where member data lives — and where it never does:**
+
+- **Never in localStorage** — the app stores nothing in `localStorage`/`sessionStorage`; the session token lives only in an `httpOnly` cookie JavaScript cannot read.
+- **Never in logs** — structured request logs carry method, path, status and the acting user (emails masked); request bodies, ledger records and agent-chat content are never logged. Agent conversations exist only in the app's own audit tables.
+- **Never in URLs** — nothing sensitive is passed via query strings; identifiers in paths are opaque UUIDs, and every mutation travels in a request body over the same-origin API.
+
+The idle session ends itself: after 15 minutes without input a 90-second warning counts down, then every open tab is signed out (multi-tab aware via `BroadcastChannel`).
 
 ## License
 
