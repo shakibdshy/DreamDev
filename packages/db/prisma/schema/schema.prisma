@@ -280,11 +280,15 @@ model TelegramPairingCode {
 }
 
 // Server-held approval pauses for Telegram agent turns (#14): the webhook is
-// stateless, so a paused confirm (inline keyboard) survives in the DB until
-// the callback resumes it or the 10-minute expiry lapses. One per chat.
+// A paused confirm survives in the DB until its callback claims it (atomic
+// delete = the claim) or the 10-minute expiry lapses. Both transports use it:
+// Telegram rows carry chatId (one pause per chat), web rows leave it null —
+// Postgres unique indexes ignore NULLs, so concurrent web pauses are fine.
+// The (threadId, interruptId) key is the replay-proof claim for web resumes:
+// a spent interrupt can never be claimed twice (#23).
 model AgentPausedApproval {
   id               String   @id @default(uuid())
-  chatId           String   @unique
+  chatId           String?  @unique
   userId           String
   threadId         String
   interruptId      String
@@ -295,6 +299,7 @@ model AgentPausedApproval {
   expiresAt        DateTime
   createdAt        DateTime @default(now())
 
+  @@unique([threadId, interruptId])
   @@map("agent_paused_approval")
 }
 

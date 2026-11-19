@@ -211,6 +211,16 @@ async function canonicalLines(db: import("@DreamDev/db").Database, session: Sess
   return null;
 }
 
+/**
+ * The atomic claim: the delete IS the gate. A fast double-tap emits two
+ * callback_query updates (distinct update_id each — the deduper passes both);
+ * exactly one claim wins and the loser acks "No pending confirmation." instead
+ * of crashing on P2025 or resuming the write again (#23).
+ */
+export function claimPausedApproval(db: import("@DreamDev/db").Database, chatId: string, id: string) {
+  return db.agentPausedApproval.deleteMany({ where: { chatId, id } });
+}
+
 /** ✅/✖ callback: resumes the paused run or reports expiry. */
 export async function handleApprovalCallback(deps: AgentBridgeDeps, chatId: string, callbackQueryId: string, approved: boolean): Promise<void> {
   const { db, client } = deps;
@@ -233,10 +243,14 @@ export async function handleApprovalCallback(deps: AgentBridgeDeps, chatId: stri
     return;
   }
 
-  // Ack the tap immediately (Telegram spins the button until answered) and
-  // claim the pause so a double-tap can't execute the write twice.
+  // Claim before acking so the answer reflects the claim outcome — a losing
+  // double-tap answers "No pending confirmation." and never resumes (#23).
+  const claimed = await claimPausedApproval(db, chatId, pending.id);
+  if (claimed.count === 0) {
+    await client.answerCallbackQuery(callbackQueryId, "No pending confirmation.");
+    return;
+  }
   await client.answerCallbackQuery(callbackQueryId, approved ? "Approved." : "Cancelled.");
-  await db.agentPausedApproval.delete({ where: { id: pending.id } });
 
   // A rejection needs no model hop — the outcome is known and canonical.
   if (!approved) {

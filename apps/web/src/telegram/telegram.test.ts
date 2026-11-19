@@ -377,7 +377,7 @@ describe("member pairing (ticket 2/8)", () => {
 // ---------------------------------------------------------------------------
 
 import { fakeText } from "@tanstack/ai/testing";
-import { handleAgentMessage, handleApprovalCallback } from "./agent-bridge";
+import { claimPausedApproval, handleAgentMessage, handleApprovalCallback } from "./agent-bridge";
 
 
 /** Local seed: one member + one bank (agent.test.ts has its own richer one). */
@@ -486,6 +486,67 @@ describe("telegram agent chat (ticket 6/8)", () => {
     expect(expense.createdBy).toBe(user.id);
     expect(await db.agentPausedApproval.count()).toBe(0);
   }, 60_000);
+
+  test("double-tap: the second approval claim loses cleanly — one write, friendly ack", async () => {
+    const { bank } = await seedFundTg();
+    const answers: string[] = [];
+    const client: TelegramClient = {
+      async sendMessage() {
+        return { ok: true, messageId: 3 };
+      },
+      async answerCallbackQuery(_id, text) {
+        answers.push(text ?? "");
+        return { ok: true };
+      },
+      async sendChatAction() {
+        return { ok: true };
+      },
+      async getMe() {
+        return { ok: true, result: { username: "dreamdev_fund_bot" } };
+      },
+    };
+    const user = { id: adminSession.user.id, role: "admin" as const, status: "active" };
+    const proposal = { entity: "expense", action: "create", args: { bankAccountId: bank.id, amount: 300, date: "2026-11-03", note: "Tea" } };
+    const fake = fakeText();
+    fake.setResponses([{ toolCalls: [{ name: "preview_write", input: proposal }] }, { text: "Here is the preview." }]);
+    await bindChat(db, { targetType: "user", targetId: user.id }, "888");
+    await handleAgentMessage({ db, client, adapter: fake }, "888", "add a 300 expense for tea", user);
+    fake.setResponses([{ toolCalls: [{ name: "write_record", input: proposal }] }]);
+    await handleAgentMessage({ db, client, adapter: fake }, "888", "ok record it", user);
+    expect(await db.agentPausedApproval.count()).toBe(1);
+
+    // A fast double-tap emits two callback_query updates racing the same pause.
+    fake.setResponses([{ text: "✅ Recorded the expense." }]);
+    await Promise.all([
+      handleApprovalCallback({ db, client, adapter: fake }, "888", "cb-a", true),
+      handleApprovalCallback({ db, client, adapter: fake }, "888", "cb-b", true),
+    ]);
+    expect(await db.expense.count()).toBe(1); // exactly one execution
+    expect(await db.agentPausedApproval.count()).toBe(0);
+    expect(answers).toContain("Approved.");
+    expect(answers).toContain("No pending confirmation."); // the loser acks, never crashes
+  }, 60_000);
+
+  test("claimPausedApproval is single-use under concurrency (the atomic gate)", async () => {
+    const chatId = "990";
+    await db.agentPausedApproval.create({
+      data: {
+        chatId,
+        userId: adminSession.user.id,
+        threadId: `telegram-${adminSession.user.id}`,
+        interruptId: "i-1",
+        interruptedRunId: "r-1",
+        toolName: "write_record",
+        argsJson: "{}",
+        messagesJson: "[]",
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    const row = await db.agentPausedApproval.findUniqueOrThrow({ where: { chatId } });
+    const results = await Promise.all([claimPausedApproval(db, chatId, row.id), claimPausedApproval(db, chatId, row.id)]);
+    expect(results.map((r) => r.count).sort()).toEqual([0, 1]); // exactly one winner
+    expect(await db.agentPausedApproval.count()).toBe(0);
+  });
 
   test("history keeps gated write pairs, trims read tools, and windows the newest rows", async () => {
     const { bank } = await seedFundTg();

@@ -419,6 +419,230 @@ describe("confirm gate: contribution writes (ticket 4/8)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Approval replay protection (#23): web pauses are server-held and consumed
+// exactly once, mirroring the Telegram AgentPausedApproval mechanism.
+// ---------------------------------------------------------------------------
+
+/** Parses the SSE body into chunks — the same stream the panel's client reads. */
+async function sseChunks(response: Response): Promise<Record<string, unknown>[]> {
+  const text = await response.text();
+  const chunks: Record<string, unknown>[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      chunks.push(JSON.parse(payload) as Record<string, unknown>);
+    } catch {
+      /* non-JSON keep-alive */
+    }
+  }
+  return chunks;
+}
+
+type InterruptBinding = { interruptedRunId: string; interruptId: string };
+
+/** The interrupt binding from a pausing turn's chunks (RUN_FINISHED outcome). */
+function bindingOf(chunks: Record<string, unknown>[]): InterruptBinding | undefined {
+  for (const chunk of chunks) {
+    const c = chunk as { type: string; outcome?: { type: string; interrupts?: { metadata?: Record<string, InterruptBinding | undefined> }[] } };
+    if (c.type === "RUN_FINISHED" && c.outcome?.type === "interrupt") {
+      const binding = c.outcome.interrupts?.[0]?.metadata?.["tanstack:interruptBinding"];
+      if (binding) return binding;
+    }
+  }
+  return undefined;
+}
+
+/** MESSAGES_SNAPSHOT messages — the wire history the panel holds at pause time. */
+function snapshotOf(chunks: Record<string, unknown>[]): unknown[] {
+  for (const chunk of chunks) {
+    const c = chunk as { type: string; messages?: unknown[] };
+    if (c.type === "MESSAGES_SNAPSHOT" && Array.isArray(c.messages)) return c.messages;
+  }
+  return [];
+}
+
+/** A wire body for the server-derived thread (the client's threadId is ignored). */
+const postBody = (messages: unknown[], runId: string, extra: Record<string, unknown> = {}) =>
+  new Request("http://127.0.0.1:5999/api/agent/chat", {
+    method: "POST",
+    body: JSON.stringify({ threadId: "web-any", runId, messages, tools: [], context: [], ...extra }),
+  });
+
+/** Drives the two-turn gated flow (preview → proposal) through the HTTP seam. */
+async function pauseViaHttp(fake: ReturnType<typeof fakeText>, input: Record<string, unknown>) {
+  const { postChat } = api({ adapter: fake });
+  fake.setResponses([{ toolCalls: [{ name: "preview_contribution", input }] }, { text: "Here is the preview." }]);
+  const previewResponse = await postChat({ request: postBody([{ id: "m1", role: "user", content: "record it" }], "p1") });
+  expect(previewResponse.status).toBe(200);
+  const previewSnapshot = snapshotOf(await sseChunks(previewResponse));
+
+  fake.setResponses([{ toolCalls: [{ name: "record_contribution", input }] }]);
+  const pauseResponse = await postChat({ request: postBody(previewSnapshot, "r1") });
+  expect(pauseResponse.status).toBe(200);
+  const pauseChunks = await sseChunks(pauseResponse);
+  const binding = bindingOf(pauseChunks);
+  expect(binding?.interruptId).toBeDefined();
+  return { pauseSnapshot: snapshotOf(pauseChunks), binding: binding! };
+}
+
+describe("approval replay protection (#23)", () => {
+  const input = (memberId: string, bankAccountId: string) => ({ memberId, bankAccountId, amount: 10_000, creditDate: "2026-10-20" });
+
+  test("a pausing turn persists the approval server-side before the response completes", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    const { binding } = await pauseViaHttp(fake, input(member.id, bank.id));
+
+    const rows = await db.agentPausedApproval.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.threadId).toBe(`web-${adminSession.user.id}`); // server-derived
+    expect(rows[0]?.chatId).toBeNull(); // web rows are not Telegram rows
+    expect(rows[0]?.interruptId).toBe(binding.interruptId);
+    expect(rows[0]?.interruptedRunId).toBe(binding.interruptedRunId);
+    expect(rows[0]?.toolName).toBe("record_contribution");
+    expect(JSON.parse(rows[0]?.argsJson ?? "{}")).toMatchObject({ amount: 10_000 });
+    expect(JSON.parse(rows[0]?.messagesJson ?? "[]").length).toBeGreaterThan(0);
+    expect(rows[0]?.expiresAt.getTime()).toBeGreaterThan(Date.now() + 9 * 60_000); // ~10 min TTL
+  });
+
+  test("a plain turn (no interrupt) persists no pause row", async () => {
+    await seedFund();
+    const fake = fakeText();
+    const { postChat } = api({ adapter: fake });
+    fake.setResponses([{ text: "Hello." }]);
+    const response = await postChat({ request: postBody([{ id: "m1", role: "user", content: "hello" }], "plain") });
+    expect(response.status).toBe(200);
+    await sseChunks(response);
+    expect(await db.agentPausedApproval.count()).toBe(0);
+  });
+
+  test("replaying the same approved resume returns 409 and writes exactly once", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    const { postChat } = api({ adapter: fake });
+    const { pauseSnapshot, binding } = await pauseViaHttp(fake, input(member.id, bank.id));
+
+    const resumeBody = {
+      parentRunId: binding.interruptedRunId,
+      resume: [{ interruptId: binding.interruptId, status: "resolved", payload: { approved: true } }],
+    };
+    fake.setResponses([{ text: "Recorded ৳10,000 for Rahim Uddin." }]);
+    const first = await postChat({ request: postBody(pauseSnapshot, "resume-1", resumeBody) });
+    expect(first.status).toBe(200);
+    await sseChunks(first);
+    expect(await db.contribution.count({ where: { creditDate: new Date("2026-10-20T00:00:00Z") } })).toBe(1);
+    expect(await db.agentPausedApproval.count()).toBe(0); // consumed
+
+    const replay = await postChat({ request: postBody(pauseSnapshot, "resume-2", resumeBody) });
+    expect(replay.status).toBe(409);
+    expect(((await replay.json()) as { error: string }).error).toContain("already handled or expired");
+    expect(await db.contribution.count({ where: { creditDate: new Date("2026-10-20T00:00:00Z") } })).toBe(1); // no second write
+  });
+
+  test("an expired pause cannot be resumed", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    const { postChat } = api({ adapter: fake });
+    const { pauseSnapshot, binding } = await pauseViaHttp(fake, input(member.id, bank.id));
+    await db.agentPausedApproval.updateMany({ data: { expiresAt: new Date(Date.now() - 1_000) } });
+
+    const response = await postChat({
+      request: postBody(pauseSnapshot, "resume-x", {
+        parentRunId: binding.interruptedRunId,
+        resume: [{ interruptId: binding.interruptId, status: "resolved", payload: { approved: true } }],
+      }),
+    });
+    expect(response.status).toBe(409);
+    await sseChunks(response);
+    expect(await db.contribution.count()).toBe(1); // seed only
+  });
+
+  test("tampered wire args are ignored — the server snapshot executes", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    const { postChat } = api({ adapter: fake });
+    const { pauseSnapshot, binding } = await pauseViaHttp(fake, input(member.id, bank.id));
+
+    const tampered = structuredClone(pauseSnapshot) as { role: string; toolCalls?: { function: { name: string; arguments: string } }[] }[];
+    for (const message of tampered) {
+      for (const call of message.toolCalls ?? []) {
+        if (call.function.name === "record_contribution") call.function.arguments = JSON.stringify({ ...input(member.id, bank.id), amount: 999 });
+      }
+    }
+
+    fake.setResponses([{ text: "Recorded." }]);
+    const response = await postChat({
+      request: postBody(tampered, "resume-t", {
+        parentRunId: binding.interruptedRunId,
+        resume: [{ interruptId: binding.interruptId, status: "resolved", payload: { approved: true } }],
+      }),
+    });
+    expect(response.status).toBe(200);
+    await sseChunks(response);
+    const created = await db.contribution.findFirst({ where: { creditDate: new Date("2026-10-20T00:00:00Z") } });
+    expect(created?.amount).toBe(10_000); // original previewed args, not the tampered 999
+  });
+
+  test("a rejected resume is consumed too — replaying it gets 409", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    const { postChat } = api({ adapter: fake });
+    const { pauseSnapshot, binding } = await pauseViaHttp(fake, input(member.id, bank.id));
+
+    const rejectBody = {
+      parentRunId: binding.interruptedRunId,
+      resume: [{ interruptId: binding.interruptId, status: "resolved", payload: { approved: false } }],
+    };
+    fake.setResponses([{ text: "Understood — nothing was recorded." }]);
+    const first = await postChat({ request: postBody(pauseSnapshot, "reject-1", rejectBody) });
+    expect(first.status).toBe(200);
+    await sseChunks(first);
+    expect(await db.contribution.count()).toBe(1); // seed only
+
+    const replay = await postChat({ request: postBody(pauseSnapshot, "reject-2", rejectBody) });
+    expect(replay.status).toBe(409);
+    expect(await db.contribution.count()).toBe(1);
+  });
+
+  test("a resume for an unknown interrupt is 409, never an ungated execute", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    const { postChat } = api({ adapter: fake });
+    const { pauseSnapshot } = await pauseViaHttp(fake, input(member.id, bank.id));
+    await db.agentPausedApproval.deleteMany({}); // pretend the row never existed / was lost
+
+    const response = await postChat({
+      request: postBody(pauseSnapshot, "resume-y", {
+        parentRunId: "r1",
+        resume: [{ interruptId: "approval_nonexistent", status: "resolved", payload: { approved: true } }],
+      }),
+    });
+    expect(response.status).toBe(409);
+    expect(await db.contribution.count()).toBe(1); // seed only — no write ever ran
+  });
+
+  test("a resume entry without an interruptId is 422, never an ungated execute", async () => {
+    const { member, bank } = await seedFund();
+    const fake = fakeText();
+    const { postChat } = api({ adapter: fake });
+    const { pauseSnapshot } = await pauseViaHttp(fake, input(member.id, bank.id));
+
+    fake.setResponses([{ text: "should never be reached" }]);
+    const response = await postChat({
+      request: postBody(pauseSnapshot, "resume-z", {
+        parentRunId: "r1",
+        resume: [{ status: "resolved", payload: { approved: true } }],
+      }),
+    });
+    expect(response.status).toBe(422);
+    expect(await db.contribution.count()).toBe(1); // seed only
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Ticket 5/8: full CRUD surface + role scoping
 // ---------------------------------------------------------------------------
 

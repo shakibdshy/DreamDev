@@ -145,12 +145,17 @@ export function AgentPanel({ user }: { user: ShellUser }) {
 
             {chat.error ? (
               <p className="rounded-lg bg-destructive/10 px-3 py-2 text-center text-xs text-destructive">
-                The assistant is unavailable right now. Try again shortly.
+                {/* A 409 from the resume turn means the pause was already claimed or expired (#23) — buttons below stay down. */}
+                {chat.error.message.includes("status: 409")
+                  ? "That confirmation was already handled or expired — ask again to start the flow over."
+                  : "The assistant is unavailable right now. Try again shortly."}
               </p>
             ) : null}
 
             {chat.interrupts.map((interrupt) => {
               if (interrupt.kind !== "tool-approval") return null;
+              // Locked once the resume turn failed (e.g. 409 already-handled) — no doomed second clicks.
+              const locked = !interrupt.canResolve || chat.resuming || !!chat.error;
               if (interrupt.toolName === "record_contribution") {
               // Canonical values from the correlated preview result — the same
               // numbers the service will write, never the model's paraphrase.
@@ -179,7 +184,7 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                     <Button
                       size="sm"
                       className="flex-1"
-                      disabled={!interrupt.canResolve || chat.resuming || !preview}
+                      disabled={locked || !preview}
                       title={preview ? undefined : "Waiting for the canonical preview"}
                       onClick={() => interrupt.resolveInterrupt(true)}
                     >
@@ -190,7 +195,7 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                       size="sm"
                       variant="outline"
                       className="flex-1"
-                      disabled={!interrupt.canResolve || chat.resuming}
+                      disabled={locked}
                       onClick={() => interrupt.resolveInterrupt(false)}
                     >
                       <XIcon className="size-4" />
@@ -222,14 +227,14 @@ export function AgentPanel({ user }: { user: ShellUser }) {
                     <Button
                       size="sm"
                       className="flex-1"
-                      disabled={!interrupt.canResolve || chat.resuming || !lines}
+                      disabled={locked || !lines}
                       title={lines ? undefined : "Waiting for the canonical preview"}
                       onClick={() => interrupt.resolveInterrupt(true)}
                     >
                       {chat.resuming ? <Loader2Icon className="size-4 animate-spin" /> : <CheckIcon className="size-4" />}
                       {isDelete ? "Delete" : "Approve"}
                     </Button>
-                    <Button size="sm" variant="outline" className="flex-1" disabled={!interrupt.canResolve || chat.resuming} onClick={() => interrupt.resolveInterrupt(false)}>
+                    <Button size="sm" variant="outline" className="flex-1" disabled={locked} onClick={() => interrupt.resolveInterrupt(false)}>
                       <XIcon className="size-4" />
                       Reject
                     </Button>
